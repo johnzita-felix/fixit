@@ -1,0 +1,96 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="theme-color" content="#123c67">
+    <meta name="description" content="Sign in to fixIt, your school maintenance tracker.">
+    <title>Sign in | fixIt</title>
+    <link rel="stylesheet" href="login.css">
+</head>
+<body>
+    <main class="login-layout">
+        <section class="welcome-panel" aria-labelledby="welcome-heading">
+            <a class="brand" href="index.html" aria-label="fixIt home">
+                <span class="brand-mark" aria-hidden="true">
+                    <svg viewBox="0 0 32 32" fill="none">
+                        <path d="M18.2 3.5a8.4 8.4 0 0 0-8.6 10.8L3.9 20a3.5 3.5 0 0 0 5 5l5.7-5.7a8.4 8.4 0 0 0 10.8-8.6l-4.6 4.6-4.7-1.2-1.2-4.7 4.6-4.6a8.4 8.4 0 0 0-1.3-1.3Z" fill="currentColor"/>
+                    </svg>
+                </span>
+                <span>fix<span class="brand-highlight">It</span></span>
+            </a>
+
+            <div class="welcome-copy">
+                <p class="eyebrow"><span class="eyebrow-dot"></span> SCHOOL MAINTENANCE, MADE SIMPLE</p>
+                <h1 id="welcome-heading">A better school day starts with <span>fixing the little things.</span></h1>
+                <p class="welcome-description">One place to report, track, and take care of the things that keep your campus running.</p>
+            </div>
+
+            <div class="campus-card" aria-hidden="true">
+                <div class="campus-card-top">
+                    <span class="campus-icon">
+                        <svg viewBox="0 0 24 24" fill="none">
+                            <path d="M3.5 20.5h17M5.5 20.5V8.8L12 4l6.5 4.8v11.7M9 20.5v-6h6v6M8.5 10.5h.01M15.5 10.5h.01" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/>
+                        </svg>
+                    </span>
+                    <span class="campus-status"><span></span> CAMPUS CARE</span>
+                </div>
+                <p class="campus-title">Small fixes. <strong>Big difference.</strong></p>
+                <div class="campus-rule"><span></span></div>
+                <div class="campus-footer"><span>Built for your school</span><span class="sparkle">✦</span></div>
+                <span class="card-screw screw-one"></span>
+                <span class="card-screw screw-two"></span>
+            </div>
+
+            <p class="welcome-footer">MADE TO KEEP YOUR CAMPUS IN GOOD SHAPE <span>✳</span></p>
+            <span class="decorative-cross cross-one" aria-hidden="true">+</span>
+            <span class="decorative-cross cross-two" aria-hidden="true">+</span>
+        </section>
+
+        <section class="form-panel" aria-labelledby="signin-heading">
+            <div class="mobile-brand" aria-hidden="true"><span class="brand-mark">✦</span> fix<span class="brand-highlight">It</span></div>
+            <div class="form-card">
+                <div class="form-heading">
+                    <p class="form-eyebrow">WELCOME BACK</p>
+                    <h2 id="signin-heading">Good to see you.</h2>
+                    <p>Sign in to your fixIt account to get things moving.</p>
+                </div>
+
+                <form class="login-form" method="post">
+                    <label for="email">Email address</label>
+                    <div class="input-wrap">
+                        <svg viewBox="0 0 24 24" aria-hidden="true">
+                            <rect x="3.5" y="5.5" width="17" height="13" rx="2.5"/>
+                            <path d="m4.5 7 7.5 5.5L19.5 7"/>
+                        </svg>
+                        <input type="email" id="email" name="email" placeholder="you@school.edu" autocomplete="email" required>
+                    </div>
+
+                    <div class="password-label-row">
+                        <label for="password">Password</label>
+                        <a class="text-link" href="forgotpw.html">Forgot password?</a>
+                    </div>
+                    <div class="input-wrap">
+                        <svg viewBox="0 0 24 24" aria-hidden="true">
+                            <rect x="4.5" y="10" width="15" height="10" rx="2"/>
+                            <path d="M8 10V7a4 4 0 0 1 8 0v3m-4 4v2"/>
+                        </svg>
+                        <input type="password" id="password" name="password" placeholder="Enter your password" autocomplete="current-password" required>
+                    </div>
+
+                    <button class="submit-button" id="loginButton" type="submit">
+                        <span>Sign in</span>
+                        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12h14m-6-6 6 6-6 6"/></svg>
+                    </button>
+                </form>
+
+                <div class="signup-prompt">
+                    <span>New to fixIt?</span>
+                    <a class="text-link" id="registerButton" href="register.html">Create an account <span aria-hidden="true">↗</span></a>
+                </div>
+            </div>
+            <p class="form-legal">A little care goes a long way. <span>✦</span></p>
+        </section>
+    </main>
+</body>
+</html>
