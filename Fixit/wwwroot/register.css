@@ -1,0 +1,32 @@
+.register-card {
+    width: min(100%, 430px);
+    padding-top: 35px;
+    padding-bottom: 29px;
+}
+
+.register-card .form-heading > p:last-child {
+    margin-bottom: 23px;
+}
+
+.register-field {
+    margin-top: 17px;
+}
+
+.register-card .submit-button {
+    margin-top: 23px;
+}
+
+.register-card .signup-prompt {
+    margin-top: 21px;
+}
+
+@media (max-width: 700px) {
+    .register-card {
+        padding-top: 31px;
+        padding-bottom: 26px;
+    }
+
+    .register-card .form-heading > p:last-child {
+        margin-bottom: 20px;
+    }
+}
