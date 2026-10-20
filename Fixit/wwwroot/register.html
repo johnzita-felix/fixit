@@ -57,14 +57,14 @@
                     <p>Create your account and help keep your campus in good shape.</p>
                 </div>
 
-                <form class="login-form" method="post">
+                <form id="register-form" class="login-form" method="post">
                     <label for="fullName">Full name</label>
                     <div class="input-wrap">
                         <svg viewBox="0 0 24 24" aria-hidden="true">
                             <circle cx="12" cy="8" r="3.5"/>
                             <path d="M5 20a7 7 0 0 1 14 0"/>
                         </svg>
-                        <input type="text" id="fullName" name="fullName" placeholder="Your name" autocomplete="name" required>
+                        <input type="text" id="reguser" name="username" placeholder="Your name" autocomplete="username" minlength="3" maxlength="50" required>
                     </div>
 
                     <div class="register-field">
@@ -78,7 +78,7 @@
                         </div>
                     </div>
 
-                    <div class="register-field">
+                    <div class="registerpw">
                         <label for="password">Create a password</label>
                         <div class="input-wrap">
                             <svg viewBox="0 0 24 24" aria-hidden="true">
