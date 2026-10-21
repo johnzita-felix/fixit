@@ -89,10 +89,18 @@
                         </div>
                     </div>
 
+                    <div class="register-field">
+                        <label for="confirmPassword">Confirm password</label>
+                        <div class="input-wrap">
+                            <input type="password" id="confirmPassword" name="confirmPassword" placeholder="Enter your password again" autocomplete="new-password" minlength="8" required>
+                        </div>
+                    </div>
+
                     <button class="submit-button" id="registerButton" type="submit">
                         <span>Create account</span>
                         <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12h14m-6-6 6 6-6 6"/></svg>
                     </button>
+                    <p id="form-message" role="status" aria-live="polite"></p>
                 </form>
 
                 <div class="signup-prompt">
@@ -103,5 +111,29 @@
             <p class="form-legal">A little care goes a long way. <span>✦</span></p>
         </section>
     </main>
+<script>
+document.getElementById('register-form').addEventListener('submit', async (event) => {
+  event.preventDefault();
+  const message = document.getElementById('form-message');
+  const button = document.getElementById('registerButton');
+  button.disabled = true;
+  message.textContent = 'Creating account…';
+  try {
+    const response = await fetch('/api/register', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        username: document.getElementById('reguser').value,
+        email: document.getElementById('email').value,
+        password: document.getElementById('password').value,
+        confirmPassword: document.getElementById('confirmPassword').value
+      })
+    });
+    const data = await response.json();
+    message.textContent = data.message || 'Unable to create account.';
+    if (response.ok) setTimeout(() => window.location.href = '/index.html', 900);
+  } catch { message.textContent = 'Could not connect to the server. Make sure the app is running.'; }
+  finally { button.disabled = false; }
+});
+</script>
 </body>
 </html>

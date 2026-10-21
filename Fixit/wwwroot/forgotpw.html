@@ -1,14 +1,41 @@
 <!DOCTYPE html>
 <html lang="en">
-    <head>  
-        <h1>Forgot Password</h1>
-    </head>
-    <body> 
-        <form>
-            <input type="text" placeholder="email" id="email">
-
-        </form>
-        <a href="index.html"><button id="resetPasswordButton">Reset Password</button></a>
-        <link rel="stylesheet" href="forgotpw.css">  
-        <link rel="server" href="/SERVER/server.js">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Forgot Password | fixIt</title>
+  <link rel="stylesheet" href="login.css">
+</head>
+<body>
+  <main class="form-panel">
+    <div class="form-card">
+      <div class="form-heading">
+        <p class="form-eyebrow">ACCOUNT RECOVERY</p>
+        <h2>Forgot password?</h2>
+        <p>Enter the email address linked to your fixIt account.</p>
+      </div>
+      <form id="forgot-form" class="login-form">
+        <label for="email">Email address</label>
+        <div class="input-wrap"><input type="email" id="email" name="email" placeholder="you@school.edu" autocomplete="email" required></div>
+        <button class="submit-button" type="submit"><span>Request reset</span></button>
+        <p id="form-message" role="status" aria-live="polite"></p>
+      </form>
+      <div class="signup-prompt"><a class="text-link" href="index.html">Back to sign in</a></div>
+    </div>
+  </main>
+  <script>
+  document.getElementById('forgot-form').addEventListener('submit', async (event) => {
+    event.preventDefault();
+    const message = document.getElementById('form-message');
+    try {
+      const response = await fetch('/api/forgot-password', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ email: document.getElementById('email').value })
+      });
+      const data = await response.json();
+      message.textContent = data.message;
+    } catch { message.textContent = 'Could not connect to the server. Make sure the app is running.'; }
+  });
+  </script>
+</body>
 </html>

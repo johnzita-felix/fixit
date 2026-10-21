@@ -56,7 +56,7 @@
                     <p>Sign in to your fixIt account to get things moving.</p>
                 </div>
 
-                <form class="login-form" method="post">
+                <form id="loginform" class="loginform" method="post">
                     <label for="email">Email address</label>
                     <div class="input-wrap">
                         <svg viewBox="0 0 24 24" aria-hidden="true">
@@ -66,7 +66,7 @@
                         <input type="email" id="email" name="email" placeholder="you@school.edu" autocomplete="email" required>
                     </div>
 
-                    <div class="password-label-row">
+                    <div class="password">
                         <label for="password">Password</label>
                         <a class="text-link" href="forgotpw.html">Forgot password?</a>
                     </div>
@@ -82,6 +82,7 @@
                         <span>Sign in</span>
                         <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12h14m-6-6 6 6-6 6"/></svg>
                     </button>
+                    <p id="form-message" role="status" aria-live="polite"></p>
                 </form>
 
                 <div class="signup-prompt">
@@ -92,5 +93,27 @@
             <p class="form-legal">A little care goes a long way. <span>✦</span></p>
         </section>
     </main>
+<script>
+document.getElementById('loginform').addEventListener('submit', async (event) => {
+  event.preventDefault();
+  const message = document.getElementById('form-message');
+  const button = document.getElementById('loginButton');
+  button.disabled = true;
+  message.textContent = 'Signing in…';
+  try {
+    const response = await fetch('/api/login', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        email: document.getElementById('email').value,
+        password: document.getElementById('password').value
+      })
+    });
+    const data = await response.json();
+    message.textContent = data.message || 'Unable to sign in.';
+    if (response.ok) window.location.href = data.redirectUrl || '/';
+  } catch { message.textContent = 'Could not connect to the server. Make sure the app is running.'; }
+  finally { button.disabled = false; }
+});
+</script>
 </body>
 </html>
