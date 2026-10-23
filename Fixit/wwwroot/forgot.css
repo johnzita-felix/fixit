@@ -1,0 +1,42 @@
+#form-message {
+            width: 100%;
+            margin: 12px 0 0;
+            text-align: center;
+            font-size: 12px;
+            line-height: 1.6;
+            overflow-wrap: anywhere;
+        }
+        #form-message:empty { display: none; }
+        #form-message.error { color: #dc2626; }
+        #form-message.info { color: #1b5a91; }
+        .recovery-note {
+            margin: -15px 0 20px;
+            color: #778594;
+            font-size: 11px;
+            line-height: 1.6;
+        }
+        .submit-button:disabled {
+            opacity: .7;
+            cursor: wait;
+            transform: none;
+        }
+        .recovery-icon {
+            display: grid;
+            width: 46px;
+            height: 46px;
+            margin: 0 0 22px;
+            place-items: center;
+            border-radius: 13px;
+            background: #edf4fa;
+            color: #1b5a91;
+        }
+        .recovery-icon svg {
+            width: 23px;
+            height: 23px;
+            fill: none;
+            stroke: currentColor;
+            stroke-width: 1.7;
+            stroke-linecap: round;
+            stroke-linejoin: round;
+        }
+        .recovery-form .submit-button { margin-top: 22px; }

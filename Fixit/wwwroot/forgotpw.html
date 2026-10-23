@@ -1,41 +1,142 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-  <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Forgot Password | fixIt</title>
-  <link rel="stylesheet" href="login.css">
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="theme-color" content="#123c67">
+    <meta name="description" content="Recover access to your fixIt account.">
+    <title>Forgot password | fixIt</title>
+    <link rel="stylesheet" href="login.css">
+    <link rel="stylesheet" href="forgot.css">
 </head>
 <body>
-  <main class="form-panel">
-    <div class="form-card">
-      <div class="form-heading">
-        <p class="form-eyebrow">ACCOUNT RECOVERY</p>
-        <h2>Forgot password?</h2>
-        <p>Enter the email address linked to your fixIt account.</p>
-      </div>
-      <form id="forgot-form" class="login-form">
-        <label for="email">Email address</label>
-        <div class="input-wrap"><input type="email" id="email" name="email" placeholder="you@school.edu" autocomplete="email" required></div>
-        <button class="submit-button" type="submit"><span>Request reset</span></button>
-        <p id="form-message" role="status" aria-live="polite"></p>
-      </form>
-      <div class="signup-prompt"><a class="text-link" href="index.html">Back to sign in</a></div>
-    </div>
-  </main>
-  <script>
-  document.getElementById('forgot-form').addEventListener('submit', async (event) => {
-    event.preventDefault();
-    const message = document.getElementById('form-message');
-    try {
-      const response = await fetch('/api/forgot-password', {
-        method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ email: document.getElementById('email').value })
-      });
-      const data = await response.json();
-      message.textContent = data.message;
-    } catch { message.textContent = 'Could not connect to the server. Make sure the app is running.'; }
-  });
-  </script>
+    <main class="login-layout">
+        <section class="welcome-panel" aria-labelledby="welcome-heading">
+            <a class="brand" href="index.html" aria-label="fixIt home">
+                <span class="brand-mark" aria-hidden="true">
+                    <svg viewBox="0 0 32 32" fill="none">
+                        <path d="M18.2 3.5a8.4 8.4 0 0 0-8.6 10.8L3.9 20a3.5 3.5 0 0 0 5 5l5.7-5.7a8.4 8.4 0 0 0 10.8-8.6l-4.6 4.6-4.7-1.2-1.2-4.7 4.6-4.6a8.4 8.4 0 0 0-1.3-1.3Z" fill="currentColor"/>
+                    </svg>
+                </span>
+                <span>fix<span class="brand-highlight">It</span></span>
+            </a>
+
+            <div class="welcome-copy">
+                <p class="eyebrow"><span class="eyebrow-dot"></span> SCHOOL MAINTENANCE, MADE SIMPLE</p>
+                <h1 id="welcome-heading">Let’s get you <span>back on track.</span></h1>
+                <p class="welcome-description">Account recovery starts here. Use the school email address connected to your fixIt account.</p>
+            </div>
+
+            <div class="campus-card" aria-hidden="true">
+                <div class="campus-card-top">
+                    <span class="campus-icon">
+                        <svg viewBox="0 0 24 24" fill="none">
+                            <path d="M3.5 20.5h17M5.5 20.5V8.8L12 4l6.5 4.8v11.7M9 20.5v-6h6v6M8.5 10.5h.01M15.5 10.5h.01" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/>
+                        </svg>
+                    </span>
+                    <span class="campus-status"><span></span> CAMPUS CARE</span>
+                </div>
+                <p class="campus-title">Small fixes. <strong>Big difference.</strong></p>
+                <div class="campus-rule"><span></span></div>
+                <div class="campus-footer"><span>Built for your school</span><span class="sparkle">✦</span></div>
+                <span class="card-screw screw-one"></span>
+                <span class="card-screw screw-two"></span>
+            </div>
+
+            <p class="welcome-footer">MADE TO KEEP YOUR CAMPUS IN GOOD SHAPE <span>✳</span></p>
+            <span class="decorative-cross cross-one" aria-hidden="true">+</span>
+            <span class="decorative-cross cross-two" aria-hidden="true">+</span>
+        </section>
+
+        <section class="form-panel" aria-labelledby="recovery-heading">
+            <a class="mobile-brand" href="index.html" aria-label="fixIt home">
+                <span class="brand-mark" aria-hidden="true">✦</span>
+                fix<span class="brand-highlight">It</span>
+            </a>
+
+            <div class="form-card">
+                <div class="recovery-icon" aria-hidden="true">
+                    <svg viewBox="0 0 24 24">
+                        <rect x="3.5" y="5.5" width="17" height="13" rx="2.5"/>
+                        <path d="m4.5 7 7.5 5.5L19.5 7"/>
+                    </svg>
+                </div>
+
+                <div class="form-heading">
+                    <p class="form-eyebrow">ACCOUNT RECOVERY</p>
+                    <h2 id="recovery-heading">Forgot password?</h2>
+                    <p>It happens. Enter the email address linked to your fixIt account.</p>
+                </div>
+
+                <p class="recovery-note" id="form-help">We’ll check your request. Email-based password reset is not fully configured yet, so this page cannot send a reset email until that setup is completed.</p>
+
+                <form id="forgot-form" class="login-form recovery-form" method="post">
+                    <label for="email">School email address</label>
+                    <div class="input-wrap">
+                        <svg viewBox="0 0 24 24" aria-hidden="true">
+                            <rect x="3.5" y="5.5" width="17" height="13" rx="2.5"/>
+                            <path d="m4.5 7 7.5 5.5L19.5 7"/>
+                        </svg>
+                        <input type="email" id="email" name="email" placeholder="you@school.edu"
+                               autocomplete="email" aria-describedby="form-help form-message" required>
+                    </div>
+
+                    <button class="submit-button" id="forgotButton" type="submit">
+                        <span>Request reset</span>
+                        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12h14m-6-6 6 6-6 6"/></svg>
+                    </button>
+                    <p id="form-message" role="status" aria-live="polite"></p>
+                </form>
+
+                <div class="signup-prompt">
+                    <a class="text-link" href="index.html">← Back to sign in</a>
+                </div>
+            </div>
+
+            <p class="form-legal">A little care goes a long way. <span>✦</span></p>
+        </section>
+    </main>
+
+    <script>
+    document.getElementById('forgot-form').addEventListener('submit', async (event) => {
+        event.preventDefault();
+
+        const emailInput = document.getElementById('email');
+        const message = document.getElementById('form-message');
+        const button = document.getElementById('forgotButton');
+        const label = button.querySelector('span');
+
+        message.className = '';
+        message.textContent = '';
+        button.disabled = true;
+        label.textContent = 'Submitting…';
+
+        try {
+            const response = await fetch('/api/forgot-password', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ email: emailInput.value.trim() })
+            });
+
+            const data = await response.json().catch(() => ({}));
+
+            if (!response.ok) {
+                message.className = 'error';
+                message.textContent = data.message || 'We couldn’t process that request. Please try again.';
+                return;
+            }
+
+            message.className = 'info';
+            message.textContent = data.message ||
+                'Your request reached the server, but email-based password recovery still needs to be configured.';
+        } catch {
+            message.className = 'error';
+            message.textContent = 'Could not connect to fixIt. Make sure the app is running, then try again.';
+        } finally {
+            button.disabled = false;
+            label.textContent = 'Request reset';
+        }
+    });
+    </script>
 </body>
 </html>
