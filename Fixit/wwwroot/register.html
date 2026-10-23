@@ -8,6 +8,26 @@
     <title>Create an account | fixIt</title>
     <link rel="stylesheet" href="login.css">
     <link rel="stylesheet" href="register.css">
+    <style>
+        .registerpw .input-wrap,
+        .register-field .input-wrap { gap: 8px; }
+        .password-toggle {
+            flex: 0 0 auto;
+            border: 0;
+            padding: 6px 2px;
+            background: transparent;
+            color: #1b5a91;
+            cursor: pointer;
+            font: inherit;
+            font-size: 11px;
+            font-weight: 700;
+        }
+        .password-toggle:focus-visible {
+            outline: 2px solid #1b5a91;
+            outline-offset: 2px;
+            border-radius: 4px;
+        }
+    </style>
 </head>
 <body>
     <main class="login-layout">
@@ -86,6 +106,7 @@
                                 <path d="M8 10V7a4 4 0 0 1 8 0v3m-4 4v2"/>
                             </svg>
                             <input type="password" id="password" name="password" placeholder="At least 8 characters" autocomplete="new-password" minlength="8" required>
+                            <button class="password-toggle" type="button" data-target="password" aria-label="Show create password" aria-pressed="false">Show</button>
                         </div>
                     </div>
 
@@ -93,6 +114,7 @@
                         <label for="confirmPassword">Confirm password</label>
                         <div class="input-wrap">
                             <input type="password" id="confirmPassword" name="confirmPassword" placeholder="Enter your password again" autocomplete="new-password" minlength="8" required>
+                            <button class="password-toggle" type="button" data-target="confirmPassword" aria-label="Show confirm password" aria-pressed="false">Show</button>
                         </div>
                     </div>
 
@@ -112,6 +134,19 @@
         </section>
     </main>
 <script>
+document.querySelectorAll('.password-toggle').forEach((toggle) => {
+  toggle.addEventListener('click', () => {
+    const input = document.getElementById(toggle.dataset.target);
+    const revealing = input.type === 'password';
+    input.type = revealing ? 'text' : 'password';
+    toggle.textContent = revealing ? 'Hide' : 'Show';
+    toggle.setAttribute('aria-label',
+      (revealing ? 'Hide ' : 'Show ') +
+      (input.id === 'password' ? 'create password' : 'confirm password'));
+    toggle.setAttribute('aria-pressed', String(revealing));
+  });
+});
+
 document.getElementById('register-form').addEventListener('submit', async (event) => {
   event.preventDefault();
   const message = document.getElementById('form-message');

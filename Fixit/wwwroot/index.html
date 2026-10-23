@@ -57,7 +57,7 @@
                 </div>
 
                 <form id="loginform" class="loginform" method="post">
-                    <label for="email">Email address</label>
+                    
                     <div class="input-wrap">
                         <svg viewBox="0 0 24 24" aria-hidden="true">
                             <rect x="3.5" y="5.5" width="17" height="13" rx="2.5"/>
@@ -66,17 +66,17 @@
                         <input type="email" id="email" name="email" placeholder="you@school.edu" autocomplete="email" required>
                     </div>
 
-                    <div class="password">
-                        <label for="password">Password</label>
-                        <a class="text-link" href="forgotpw.html">Forgot password?</a>
-                    </div>
-                    <div class="input-wrap">
-                        <svg viewBox="0 0 24 24" aria-hidden="true">
-                            <rect x="4.5" y="10" width="15" height="10" rx="2"/>
-                            <path d="M8 10V7a4 4 0 0 1 8 0v3m-4 4v2"/>
-                        </svg>
-                        <input type="password" id="password" name="password" placeholder="Enter your password" autocomplete="current-password" required>
-                    </div>
+                    
+                <div class="input-wrap">
+                    <svg viewBox="0 0 24 24" aria-hidden="true">
+                        <rect x="4.5" y="10" width="15" height="10" rx="2"/>
+                        <path d="M8 10V7a4 4 0 0 1 8 0v3m-4 4v2"/>
+                    </svg>
+                    <input type="password" id="password" name="password"placeholder="Enter your password" autocomplete="current-password" required>
+                    <button type="button" class="password-toggle"
+                        data-target="password">Show</button>
+                </div>
+
 
                     <button class="submit-button" id="loginButton" type="submit">
                         <span>Sign in</span>
@@ -94,12 +94,23 @@
         </section>
     </main>
 <script>
+    
+document.querySelectorAll('.password-toggle').forEach(button => {
+    button.addEventListener('click', () => {
+        const input = document.getElementById(button.dataset.target);
+        const isHidden = input.type === 'password';
+
+        input.type = isHidden ? 'text' : 'password';
+        button.textContent = isHidden ? 'Hide' : 'Show';
+    });
+});
+
 document.getElementById('loginform').addEventListener('submit', async (event) => {
   event.preventDefault();
   const message = document.getElementById('form-message');
   const button = document.getElementById('loginButton');
   button.disabled = true;
-  message.textContent = 'Signing in…';
+  ;
   try {
     const response = await fetch('/api/login', {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
@@ -108,11 +119,23 @@ document.getElementById('loginform').addEventListener('submit', async (event) =>
         password: document.getElementById('password').value
       })
     });
-    const data = await response.json();
-    message.textContent = data.message || 'Unable to sign in.';
-    if (response.ok) window.location.href = data.redirectUrl || '/';
-  } catch { message.textContent = 'Could not connect to the server. Make sure the app is running.'; }
-  finally { button.disabled = false; }
+    
+const data = await response.json();
+
+if (response.ok) {
+    message.classList.add('success');
+    window.location.href = data.redirectUrl || '/';
+} else {
+    message.classList.remove('success');
+    message.textContent = data.message || 'Invalid email or password.';
+}
+
+  } catch {
+    message.classList.remove('success');
+    message.textContent = 'Could not connect to the server. Make sure the app is running.';
+  } finally {
+    button.disabled = false;
+  }
 });
 </script>
 </body>

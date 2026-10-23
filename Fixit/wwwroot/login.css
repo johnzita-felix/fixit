@@ -434,6 +434,17 @@ a {
     color: #a5afb9;
 }
 
+.password-toggle {
+    cursor: pointer;
+    border: none;
+    background: transparent;
+    color: #123c67;
+    font: inherit;
+    font-size: 13px;
+    font-weight: 600;
+    padding: 8px;
+}
+
 .submit-button {
     display: flex;
     width: 100%;
@@ -490,6 +501,20 @@ a {
 .signup-prompt .text-link span {
     margin-left: 2px;
     color: #cc9b1d;
+}
+
+#form-message {
+    width: 100%;
+    text-align: center;
+    color: #dc2626;
+    font-size: 14px;
+    margin: 12px 0 0;
+    line-height: 1.5;
+}
+
+
+#form-message:empty {
+    display: none;
 }
 
 .form-legal {
