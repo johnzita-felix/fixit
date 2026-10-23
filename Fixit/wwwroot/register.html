@@ -78,7 +78,7 @@
                 </div>
 
                 <form id="register-form" class="login-form" method="post">
-                    <label for="fullName">Full name</label>
+                    <label for="reguser">Full name</label>
                     <div class="input-wrap">
                         <svg viewBox="0 0 24 24" aria-hidden="true">
                             <circle cx="12" cy="8" r="3.5"/>
@@ -152,6 +152,7 @@ document.getElementById('register-form').addEventListener('submit', async (event
   const message = document.getElementById('form-message');
   const button = document.getElementById('registerButton');
   button.disabled = true;
+  message.className = '';
   message.textContent = 'Creating account…';
   try {
     const response = await fetch('/api/register', {
@@ -164,9 +165,13 @@ document.getElementById('register-form').addEventListener('submit', async (event
       })
     });
     const data = await response.json();
+    message.className = response.ok ? 'success' : 'error';
     message.textContent = data.message || 'Unable to create account.';
     if (response.ok) setTimeout(() => window.location.href = '/index.html', 900);
-  } catch { message.textContent = 'Could not connect to the server. Make sure the app is running.'; }
+  } catch {
+    message.className = 'error';
+    message.textContent = 'Could not connect to the server. Make sure the app is running.';
+  }
   finally { button.disabled = false; }
 });
 </script>

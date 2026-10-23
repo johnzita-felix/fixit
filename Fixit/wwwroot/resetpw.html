@@ -1,0 +1,123 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="theme-color" content="#123c67">
+    <meta name="description" content="Choose a new fixIt account password.">
+    <title>Reset password | fixIt</title>
+    <link rel="stylesheet" href="login.css">
+    <style>
+        .recovery-icon { display:grid; width:46px; height:46px; margin:0 0 22px; place-items:center; border-radius:13px; background:#edf4fa; color:#1b5a91; }
+        .recovery-icon svg { width:23px; height:23px; fill:none; stroke:currentColor; stroke-width:1.7; stroke-linecap:round; stroke-linejoin:round; }
+        .submit-button:disabled { opacity:.7; cursor:wait; transform:none; }
+        .reset-help { margin:0 0 18px; color:#778594; font-size:12px; line-height:1.6; }
+    </style>
+</head>
+<body>
+    <main class="login-layout">
+        <section class="welcome-panel" aria-labelledby="welcome-heading">
+            <a class="brand" href="index.html" aria-label="fixIt home">
+                <span class="brand-mark" aria-hidden="true"><svg viewBox="0 0 32 32" fill="none"><path d="M18.2 3.5a8.4 8.4 0 0 0-8.6 10.8L3.9 20a3.5 3.5 0 0 0 5 5l5.7-5.7a8.4 8.4 0 0 0 10.8-8.6l-4.6 4.6-4.7-1.2-1.2-4.7 4.6-4.6a8.4 8.4 0 0 0-1.3-1.3Z" fill="currentColor"/></svg></span>
+                <span>fix<span class="brand-highlight">It</span></span>
+            </a>
+            <div class="welcome-copy">
+                <p class="eyebrow"><span class="eyebrow-dot"></span> SCHOOL MAINTENANCE, MADE SIMPLE</p>
+                <h1 id="welcome-heading">A fresh start for <span>your account.</span></h1>
+                <p class="welcome-description">Choose a new password to get back to taking care of your campus.</p>
+            </div>
+            <div class="campus-card" aria-hidden="true">
+                <div class="campus-card-top"><span class="campus-icon"><svg viewBox="0 0 24 24" fill="none"><path d="M3.5 20.5h17M5.5 20.5V8.8L12 4l6.5 4.8v11.7M9 20.5v-6h6v6M8.5 10.5h.01M15.5 10.5h.01" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg></span><span class="campus-status"><span></span> CAMPUS CARE</span></div>
+                <p class="campus-title">Small fixes. <strong>Big difference.</strong></p><div class="campus-rule"><span></span></div><div class="campus-footer"><span>Built for your school</span><span class="sparkle">✦</span></div><span class="card-screw screw-one"></span><span class="card-screw screw-two"></span>
+            </div>
+            <p class="welcome-footer">MADE TO KEEP YOUR CAMPUS IN GOOD SHAPE <span>✳</span></p>
+            <span class="decorative-cross cross-one" aria-hidden="true">+</span><span class="decorative-cross cross-two" aria-hidden="true">+</span>
+        </section>
+        <section class="form-panel" aria-labelledby="reset-heading">
+            <a class="mobile-brand" href="index.html" aria-label="fixIt home"><span class="brand-mark" aria-hidden="true">✦</span> fix<span class="brand-highlight">It</span></a>
+            <div class="form-card">
+                <div class="recovery-icon" aria-hidden="true"><svg viewBox="0 0 24 24"><rect x="4.5" y="10" width="15" height="10" rx="2"/><path d="M8 10V7a4 4 0 0 1 8 0v3m-4 4v2"/></svg></div>
+                <div class="form-heading">
+                    <p class="form-eyebrow">ACCOUNT RECOVERY</p>
+                    <h2 id="reset-heading">Choose a new password.</h2>
+                    <p>Use at least 8 characters. This reset link can only be used once and expires after 30 minutes.</p>
+                </div>
+                <form id="reset-form" class="login-form" method="post">
+                    <label for="password">New password</label>
+                    <div class="input-wrap">
+                        <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="4.5" y="10" width="15" height="10" rx="2"/><path d="M8 10V7a4 4 0 0 1 8 0v3m-4 4v2"/></svg>
+                        <input type="password" id="password" autocomplete="new-password" minlength="8" maxlength="128" required>
+                        <button type="button" class="password-toggle" data-target="password" aria-pressed="false">Show</button>
+                    </div>
+                    <label for="confirmPassword">Confirm new password</label>
+                    <div class="input-wrap">
+                        <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="4.5" y="10" width="15" height="10" rx="2"/><path d="M8 10V7a4 4 0 0 1 8 0v3m-4 4v2"/></svg>
+                        <input type="password" id="confirmPassword" autocomplete="new-password" minlength="8" maxlength="128" required>
+                        <button type="button" class="password-toggle" data-target="confirmPassword" aria-pressed="false">Show</button>
+                    </div>
+                    <button class="submit-button" id="resetButton" type="submit"><span>Reset password</span><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12h14m-6-6 6 6-6 6"/></svg></button>
+                    <p id="form-message" role="status" aria-live="polite"></p>
+                </form>
+                <div class="signup-prompt"><a class="text-link" href="index.html">← Back to sign in</a></div>
+            </div>
+            <p class="form-legal">A little care goes a long way. <span>✦</span></p>
+        </section>
+    </main>
+    <script>
+    document.querySelectorAll('.password-toggle').forEach(button => {
+        button.addEventListener('click', () => {
+            const input = document.getElementById(button.dataset.target);
+            const revealing = input.type === 'password';
+            input.type = revealing ? 'text' : 'password';
+            button.textContent = revealing ? 'Hide' : 'Show';
+            button.setAttribute('aria-pressed', String(revealing));
+        });
+    });
+
+    document.getElementById('reset-form').addEventListener('submit', async (event) => {
+        event.preventDefault();
+        const message = document.getElementById('form-message');
+        const button = document.getElementById('resetButton');
+        const label = button.querySelector('span');
+        const password = document.getElementById('password').value;
+        const confirmPassword = document.getElementById('confirmPassword').value;
+        const token = new URLSearchParams(window.location.search).get('token');
+
+        message.className = '';
+        if (!token) {
+            message.className = 'error';
+            message.textContent = 'This reset link is missing or invalid. Request a new one.';
+            return;
+        }
+        if (password !== confirmPassword) {
+            message.className = 'error';
+            message.textContent = 'The passwords do not match.';
+            return;
+        }
+
+        button.disabled = true;
+        label.textContent = 'Updating…';
+        try {
+            const response = await fetch('/api/reset-password', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ token, password, confirmPassword })
+            });
+            const data = await response.json().catch(() => ({}));
+            message.className = response.ok ? 'success' : 'error';
+            message.textContent = data.message || (response.ok ? 'Password updated. You can now sign in.' : 'This reset link is invalid or expired.');
+            if (response.ok) {
+                document.getElementById('reset-form').reset();
+                setTimeout(() => window.location.href = '/index.html', 1600);
+            }
+        } catch {
+            message.className = 'error';
+            message.textContent = 'Could not connect to fixIt. Make sure the app is running.';
+        } finally {
+            button.disabled = false;
+            label.textContent = 'Reset password';
+        }
+    });
+    </script>
+</body>
+</html>
