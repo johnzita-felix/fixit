@@ -126,7 +126,7 @@ document.getElementById('loginform').addEventListener('submit', async (event) =>
     if (response.ok) {
       message.className = 'success';
       message.textContent = data.message || 'Login successful!';
-      window.location.href = data.redirectUrl || '/';
+      window.location.href = data.redirectUrl || 'dashboard_user.html';
     } else {
       message.className = 'error';
       message.textContent = data.message || 'Invalid email or password.';

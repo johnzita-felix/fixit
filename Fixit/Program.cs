@@ -160,7 +160,7 @@ app.MapPost("/api/login", async (
         CookieAuthenticationDefaults.AuthenticationScheme,
         new ClaimsPrincipal(identity));
 
-    return Results.Ok(new { message = "Login successful!", redirectUrl = "/" });
+    return Results.Ok(new { message = "Login successful!", redirectUrl = "dashboard_user.html" });
 }).RequireRateLimiting("auth");
 
 app.MapPost("/api/forgot-password", async (
