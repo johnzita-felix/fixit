@@ -153,14 +153,16 @@ app.MapPost("/api/login", async (
     {
         new Claim(ClaimTypes.NameIdentifier, user.Id.ToString()),
         new Claim(ClaimTypes.Name, user.Username),
-        new Claim(ClaimTypes.Email, user.Email ?? "")
+        new Claim(ClaimTypes.Email, user.Email ?? ""),
+        new Claim(ClaimTypes.Role, user.Role == "admin" ? "admin" : "user")
     };
     var identity = new ClaimsIdentity(claims, CookieAuthenticationDefaults.AuthenticationScheme);
     await context.SignInAsync(
         CookieAuthenticationDefaults.AuthenticationScheme,
         new ClaimsPrincipal(identity));
 
-    return Results.Ok(new { message = "Login successful!", redirectUrl = "dashboard_user.html" });
+    var redirectUrl = user.Role == "admin" ? "dashboard_admin.html" : "dashboard_user.html";
+    return Results.Ok(new { message = "Login successful!", redirectUrl });
 }).RequireRateLimiting("auth");
 
 app.MapPost("/api/forgot-password", async (
@@ -261,7 +263,8 @@ app.MapGet("/api/me", (HttpContext context) =>
     Results.Ok(new
     {
         username = context.User.Identity?.Name,
-        email = context.User.FindFirstValue(ClaimTypes.Email)
+        email = context.User.FindFirstValue(ClaimTypes.Email),
+        role = context.User.FindFirstValue(ClaimTypes.Role) ?? "user"
     })).RequireAuthorization();
 
 app.MapPost("/api/logout", async (HttpContext context) =>
@@ -305,11 +308,11 @@ static async Task EnsureAuthColumnsAsync(AppDbContext db)
                 columns.Add(reader.GetString(1));
         }
 
-        async Task AddColumnIfMissing(string name, string type)
+        async Task AddColumnIfMissing(string name, string declaration)
         {
             if (columns.Contains(name)) return;
             await using var command = connection.CreateCommand();
-            command.CommandText = $"ALTER TABLE \"Users\" ADD COLUMN \"{name}\" {type} NULL;";
+            command.CommandText = $"ALTER TABLE \"Users\" ADD COLUMN \"{name}\" {declaration};";
             await command.ExecuteNonQueryAsync();
             columns.Add(name);
         }
@@ -317,6 +320,7 @@ static async Task EnsureAuthColumnsAsync(AppDbContext db)
         await AddColumnIfMissing("Email", "TEXT");
         await AddColumnIfMissing("PasswordResetTokenHash", "TEXT");
         await AddColumnIfMissing("PasswordResetTokenExpiresUtc", "TEXT");
+        await AddColumnIfMissing("Role", "TEXT NOT NULL DEFAULT 'user'");
 
         await using (var command = connection.CreateCommand())
         {
@@ -417,6 +421,7 @@ public class AppUser
     public string Username { get; set; } = "";
     public string PasswordHash { get; set; } = "";
     public string? Email { get; set; }
+    public string Role { get; set; } = "user";
     public string? PasswordResetTokenHash { get; set; }
     public DateTime? PasswordResetTokenExpiresUtc { get; set; }
 }

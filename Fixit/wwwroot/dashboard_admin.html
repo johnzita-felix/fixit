@@ -1,0 +1,89 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="theme-color" content="#123c67">
+    <meta name="description" content="Review and manage school maintenance reports with fixIt.">
+    <title>Maintenance desk | fixIt</title>
+    <link rel="stylesheet" href="login.css">
+    <script src="dashboard.js" defer></script>
+</head>
+<body class="dashboard-page" data-role="admin">
+    <header class="dashboard-header">
+        <a class="dashboard-brand" href="index.html" aria-label="fixIt home">
+            <span class="brand-mark" aria-hidden="true">✦</span>
+            <span>fix<span class="brand-highlight">It</span></span>
+        </a>
+        <label class="dashboard-search">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="10.8" cy="10.8" r="6.8"/><path d="m16 16 4.5 4.5"/></svg>
+            <input id="report-search" type="search" placeholder="Search reports, places, or details" autocomplete="off">
+            <span class="search-shortcut" aria-hidden="true">⌕</span>
+        </label>
+        <div class="profile-area">
+            <button class="profile-button" id="profile-toggle" type="button" aria-expanded="false" aria-controls="profile-menu" aria-label="Open profile menu">
+                <span class="profile-avatar" id="profile-avatar">M</span>
+                <span class="profile-name" id="profile-name">Maintenance team</span>
+                <svg class="profile-chevron" viewBox="0 0 20 20" aria-hidden="true"><path d="m5 7.5 5 5 5-5"/></svg>
+            </button>
+            <div class="profile-menu" id="profile-menu" hidden>
+                <div class="profile-menu-heading"><span class="profile-avatar profile-avatar-small" id="menu-avatar">M</span><span><strong id="menu-name">Maintenance team</strong><small>School community</small></span></div>
+                <button type="button" data-open-settings>Settings</button>
+                <button type="button" class="logout-button" data-logout>Log out</button>
+            </div>
+        </div>
+    </header>
+
+    <main class="dashboard-main">
+        <section class="dashboard-intro admin-intro">
+            <div>
+                <p class="dashboard-eyebrow"><span class="eyebrow-dot"></span> MAINTENANCE DESK</p>
+                <h1>A campus that works <span>starts with your team.</span></h1>
+                <p class="dashboard-description">Review incoming reports, keep everyone updated, and get campus fixes moving.</p>
+            </div>
+            <div class="admin-intro-note"><span class="admin-note-icon" aria-hidden="true">✦</span><span><strong>Every fix matters.</strong><small>Thanks for taking care of campus.</small></span></div>
+        </section>
+
+        <section class="dashboard-stats" aria-label="Maintenance report summary">
+            <article class="stat-card"><span class="stat-icon stat-icon-blue" aria-hidden="true">◎</span><span><small>All reports</small><strong id="stat-total">0</strong></span></article>
+            <article class="stat-card"><span class="stat-icon stat-icon-gold" aria-hidden="true">◷</span><span><small>Needs attention</small><strong id="stat-active">0</strong></span></article>
+            <article class="stat-card"><span class="stat-icon stat-icon-green" aria-hidden="true">✓</span><span><small>Resolved</small><strong id="stat-resolved">0</strong></span></article>
+        </section>
+
+        <section class="reports-section" aria-labelledby="reports-heading">
+            <div class="section-heading">
+                <div><p class="section-kicker">KEEP CAMPUS RUNNING</p><h2 id="reports-heading">Report queue</h2></div>
+                <button class="filter-toggle" id="filter-toggle" type="button" aria-expanded="false" aria-controls="filter-panel"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 6h16M7 12h10m-7 6h4"/><circle cx="8" cy="6" r="1.5"/><circle cx="15" cy="12" r="1.5"/><circle cx="12" cy="18" r="1.5"/></svg> Filter &amp; sort <span class="filter-chevron" aria-hidden="true">⌄</span></button>
+            </div>
+            <nav class="report-tabs" aria-label="Report queue views">
+                <button class="report-tab is-active" type="button" data-tab="all">All reports <span id="tab-count-all">0</span></button>
+                <button class="report-tab" type="button" data-tab="attention">Needs attention</button>
+                <button class="report-tab" type="button" data-tab="progress">In progress</button>
+                <button class="report-tab" type="button" data-tab="resolved">Resolved</button>
+            </nav>
+            <div class="filter-panel" id="filter-panel" hidden>
+                <label>Status<select id="status-filter"><option value="">All statuses</option><option>New</option><option>Seen</option><option>In progress</option><option>Fixed</option><option>Closed</option></select></label>
+                <label>Location<input id="location-filter" type="search" placeholder="e.g. Science block"></label>
+                <label>Sort by<select id="sort-filter"><option value="newest">Newest first</option><option value="oldest">Oldest first</option></select></label>
+                <button type="button" class="clear-filters" id="clear-filters">Clear filters</button>
+            </div>
+            <div class="dashboard-message" id="dashboard-message" role="status" aria-live="polite"></div>
+            <div class="report-grid" id="report-grid" aria-live="polite"></div>
+        </section>
+        <footer class="dashboard-footer">MADE TO KEEP YOUR CAMPUS IN GOOD SHAPE <span>✳</span></footer>
+    </main>
+
+    <dialog class="dashboard-dialog" id="settings-dialog" aria-labelledby="settings-dialog-title">
+        <form id="settings-form" class="dialog-card">
+            <button class="dialog-close" type="button" data-close-dialog aria-label="Close">×</button>
+            <p class="section-kicker">YOUR ACCOUNT</p>
+            <h2 id="settings-dialog-title">Profile settings</h2>
+            <p class="dialog-description">Choose how your name appears when you manage reports in this browser.</p>
+            <label for="settings-name">Display name</label>
+            <input id="settings-name" name="name" maxlength="60" required>
+            <p class="dialog-error" id="settings-error" role="alert"></p>
+            <button class="add-report-button dialog-submit" type="submit">Save settings <span aria-hidden="true">→</span></button>
+        </form>
+    </dialog>
+</body>
+</html>
