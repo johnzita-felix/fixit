@@ -56,7 +56,7 @@
                     <p>Sign in to your fixIt account to get things moving.</p>
                 </div>
 
-                <form id="loginform" class="loginform" method="post">
+                <form id="loginform" class="loginform login-form" method="post">
                     <label for="email">Email address</label>
                     <div class="input-wrap">
                         <svg viewBox="0 0 24 24" aria-hidden="true">
@@ -104,6 +104,7 @@ document.querySelectorAll('.password-toggle').forEach(button => {
 
         input.type = isHidden ? 'text' : 'password';
         button.textContent = isHidden ? 'Hide' : 'Show';
+        button.setAttribute('aria-pressed', String(isHidden));
     });
 });
 

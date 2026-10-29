@@ -11,6 +11,10 @@
         .recovery-icon { display:grid; width:46px; height:46px; margin:0 0 22px; place-items:center; border-radius:13px; background:#edf4fa; color:#1b5a91; }
         .recovery-icon svg { width:23px; height:23px; fill:none; stroke:currentColor; stroke-width:1.7; stroke-linecap:round; stroke-linejoin:round; }
         .submit-button:disabled { opacity:.7; cursor:wait; transform:none; }
+        .recovery-note { margin:0 0 12px; color:#778594; font-size:12px; line-height:1.6; }
+        .recovery-actions { display:flex; justify-content:space-between; gap:16px; margin-top:14px; }
+        .recovery-actions .text-link { padding:0; border:0; background:transparent; cursor:pointer; font:inherit; }
+        .recovery-actions .text-link:disabled { color:#778594; cursor:wait; text-decoration:none; }
     </style>
 </head>
 <body>
@@ -47,7 +51,7 @@
                 <div class="form-heading">
                     <p class="form-eyebrow">ACCOUNT RECOVERY</p>
                     <h2 id="recovery-heading">Forgot password?</h2>
-                    <p>Enter the email address linked to your fixIt account. We’ll send a secure reset link if an account matches.</p>
+                    <p id="recovery-description">Enter the email address linked to your fixIt account. We’ll send a verification code if an account matches.</p>
                 </div>
                 <form id="forgot-form" class="login-form" method="post">
                     <label for="email">School email address</label>
@@ -55,46 +59,197 @@
                         <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3.5" y="5.5" width="17" height="13" rx="2.5"/><path d="m4.5 7 7.5 5.5L19.5 7"/></svg>
                         <input type="email" id="email" name="email" placeholder="you@school.edu" autocomplete="email" required>
                     </div>
-                    <button class="submit-button" id="forgotButton" type="submit"><span>Send reset link</span><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12h14m-6-6 6 6-6 6"/></svg></button>
-                    <p id="form-message" role="status" aria-live="polite"></p>
+                    <button class="submit-button" id="forgotButton" type="submit"><span>Send verification code</span><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12h14m-6-6 6 6-6 6"/></svg></button>
                 </form>
+                <form id="code-form" class="login-form" method="post" hidden>
+                    <label for="verificationCode">Six-digit verification code</label>
+                    <div class="input-wrap">
+                        <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3.5" y="5.5" width="17" height="13" rx="2.5"/><path d="M7.5 10h.01M12 10h.01M16.5 10h.01M8 14.5h8"/></svg>
+                        <input type="text" id="verificationCode" name="verificationCode" inputmode="numeric" autocomplete="one-time-code" pattern="[0-9]{6}" maxlength="6" placeholder="000000" required>
+                    </div>
+                    <p id="code-countdown" class="recovery-note" aria-live="polite"></p>
+                    <button class="submit-button" id="verifyButton" type="submit"><span>Verify code</span><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12h14m-6-6 6 6-6 6"/></svg></button>
+                    <button class="submit-button" id="continueButton" type="button" hidden><span>Continue to new password</span><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12h14m-6-6 6 6-6 6"/></svg></button>
+                    <div class="recovery-actions">
+                        <button class="text-link" id="resendButton" type="button">Resend code</button>
+                        <button class="text-link" id="backButton" type="button">← Use a different email</button>
+                    </div>
+                </form>
+                <p id="form-message" role="status" aria-live="polite"></p>
                 <div class="signup-prompt"><a class="text-link" href="index.html">← Back to sign in</a></div>
             </div>
             <p class="form-legal">A little care goes a long way. <span>✦</span></p>
         </section>
     </main>
     <script>
-    document.getElementById('forgot-form').addEventListener('submit', async (event) => {
-        event.preventDefault();
-        const message = document.getElementById('form-message');
+    const emailForm = document.getElementById('forgot-form');
+    const codeForm = document.getElementById('code-form');
+    const message = document.getElementById('form-message');
+    const heading = document.getElementById('recovery-heading');
+    const description = document.getElementById('recovery-description');
+    const emailInput = document.getElementById('email');
+    const codeInput = document.getElementById('verificationCode');
+    const countdown = document.getElementById('code-countdown');
+    const resendButton = document.getElementById('resendButton');
+    const verifyButton = document.getElementById('verifyButton');
+    const continueButton = document.getElementById('continueButton');
+    const storage = {
+        email: 'fixitRecoveryEmail',
+        expires: 'fixitRecoveryExpiresAt',
+        resendAt: 'fixitRecoveryResendAt',
+        token: 'fixitRecoveryResetToken'
+    };
+    let timer;
+
+    function showMessage(text, kind) {
+        message.className = kind || '';
+        message.textContent = text;
+    }
+
+    function showEmailStage() {
+        emailForm.hidden = false;
+        codeForm.hidden = true;
+        heading.textContent = 'Forgot password?';
+        description.textContent = 'Enter the email address linked to your fixIt account. We’ll send a verification code if an account matches.';
+        showMessage('', '');
+    }
+
+    function showCodeStage(verified) {
+        emailForm.hidden = true;
+        codeForm.hidden = false;
+        emailInput.value = sessionStorage.getItem(storage.email) || '';
+        heading.textContent = verified ? 'Email verified.' : 'Check your email.';
+        description.textContent = verified
+            ? 'Your email is verified. Continue to choose a new password.'
+            : 'Enter the six-digit code sent to your email. It expires in 10 minutes.';
+        codeInput.hidden = verified;
+        codeForm.querySelector('label[for="verificationCode"]').hidden = verified;
+        verifyButton.hidden = verified;
+        continueButton.hidden = !verified;
+        resendButton.hidden = verified;
+        countdown.hidden = verified;
+        showMessage('', '');
+        if (!verified) {
+            codeInput.value = '';
+            updateCountdown();
+            codeInput.focus();
+        }
+    }
+
+    function updateCountdown() {
+        const now = Date.now();
+        const expiresAt = Number(sessionStorage.getItem(storage.expires) || 0);
+        const resendAt = Number(sessionStorage.getItem(storage.resendAt) || 0);
+        const seconds = Math.max(0, Math.ceil((expiresAt - now) / 1000));
+        const minutesText = `${Math.floor(seconds / 60)}:${String(seconds % 60).padStart(2, '0')}`;
+        countdown.textContent = seconds > 0
+            ? `This code expires in ${minutesText}.`
+            : 'This code has expired. Request a new code.';
+        const cooldown = Math.max(0, Math.ceil((resendAt - now) / 1000));
+        resendButton.disabled = cooldown > 0;
+        resendButton.textContent = cooldown > 0 ? `Resend code in ${cooldown}s` : 'Resend code';
+        if (seconds === 0 && cooldown === 0) {
+            window.clearInterval(timer);
+        }
+    }
+
+    async function requestCode(email) {
         const button = document.getElementById('forgotButton');
         const label = button.querySelector('span');
         button.disabled = true;
         label.textContent = 'Sending…';
-        message.className = '';
-        message.textContent = '';
+        showMessage('', '');
         try {
             const response = await fetch('/api/forgot-password', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ email: document.getElementById('email').value.trim() })
+                body: JSON.stringify({ email })
             });
             const data = await response.json().catch(() => ({}));
-            if (response.ok) {
-                message.className = 'success';
-                message.textContent = data.message || 'If an account with that email exists, reset instructions will be sent shortly.';
-            } else {
-                message.className = 'error';
-                message.textContent = data.message || 'We could not process the request. Please try again.';
+            if (!response.ok) {
+                showMessage(data.detail || data.message || 'We could not send a verification code. Please try again later.', 'error');
+                return false;
             }
+            sessionStorage.setItem(storage.email, email);
+            sessionStorage.setItem(storage.expires, String(Date.now() + (data.expiresInSeconds || 600) * 1000));
+            sessionStorage.setItem(storage.resendAt, String(Date.now() + 60_000));
+            sessionStorage.removeItem(storage.token);
+            showCodeStage(false);
+            showMessage(data.message || 'If an account with that email exists, a verification code will be sent shortly.', 'info');
+            window.clearInterval(timer);
+            timer = window.setInterval(updateCountdown, 1000);
+            return true;
         } catch {
-            message.className = 'error';
-            message.textContent = 'Could not connect to fixIt. Make sure the app is running.';
+            showMessage('Could not connect to fixIt. Make sure the app is running.', 'error');
+            return false;
         } finally {
             button.disabled = false;
-            label.textContent = 'Send reset link';
+            label.textContent = 'Send verification code';
+        }
+    }
+
+    emailForm.addEventListener('submit', async (event) => {
+        event.preventDefault();
+        await requestCode(emailInput.value.trim());
+    });
+
+    resendButton.addEventListener('click', async () => {
+        if (resendButton.disabled) return;
+        const sent = await requestCode(sessionStorage.getItem(storage.email));
+        if (sent) {
+            showCodeStage(false);
+            window.clearInterval(timer);
+            timer = window.setInterval(updateCountdown, 1000);
         }
     });
+
+    codeForm.addEventListener('submit', async (event) => {
+        event.preventDefault();
+        verifyButton.disabled = true;
+        verifyButton.querySelector('span').textContent = 'Verifying…';
+        showMessage('', '');
+        try {
+            const response = await fetch('/api/verify-reset-code', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    email: sessionStorage.getItem(storage.email),
+                    code: codeInput.value.trim()
+                })
+            });
+            const data = await response.json().catch(() => ({}));
+            if (!response.ok) {
+                showMessage(data.message || 'We could not verify that code. Please try again.', 'error');
+                return;
+            }
+            sessionStorage.setItem(storage.token, data.resetToken);
+            window.location.href = '/resetpw.html';
+        } catch {
+            showMessage('Could not connect to fixIt. Make sure the app is running.', 'error');
+        } finally {
+            verifyButton.disabled = false;
+            verifyButton.querySelector('span').textContent = 'Verify code';
+        }
+    });
+
+    document.getElementById('backButton').addEventListener('click', showEmailStage);
+    continueButton.addEventListener('click', () => {
+        window.location.href = '/resetpw.html';
+    });
+
+    codeInput.addEventListener('input', () => {
+        codeInput.value = codeInput.value.replace(/\D/g, '').slice(0, 6);
+    });
+
+    emailInput.value = sessionStorage.getItem(storage.email) || '';
+    if (sessionStorage.getItem(storage.token)) {
+        showCodeStage(true);
+    } else if (sessionStorage.getItem(storage.email)) {
+        showCodeStage(false);
+        timer = window.setInterval(updateCountdown, 1000);
+    } else {
+        showEmailStage();
+    }
     </script>
 </body>
 </html>

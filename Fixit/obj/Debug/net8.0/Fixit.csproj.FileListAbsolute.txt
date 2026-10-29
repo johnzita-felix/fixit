@@ -65,3 +65,12 @@ C:\Users\LMI\Desktop\Grade 12\Sagittarius\vscode\fixit\Fixit\obj\Debug\net8.0\re
 C:\Users\LMI\Desktop\Grade 12\Sagittarius\vscode\fixit\Fixit\obj\Debug\net8.0\Fixit.pdb
 C:\Users\LMI\Desktop\Grade 12\Sagittarius\vscode\fixit\Fixit\obj\Debug\net8.0\Fixit.genruntimeconfig.cache
 C:\Users\LMI\Desktop\Grade 12\Sagittarius\vscode\fixit\Fixit\obj\Debug\net8.0\ref\Fixit.dll
+C:\Users\LMI\AppData\Local\Temp\fixit-email-reset-build\appsettings.Development.json
+C:\Users\LMI\AppData\Local\Temp\fixit-email-reset-build\appsettings.json
+C:\Users\LMI\AppData\Local\Temp\fixit-email-reset-build\Fixit.staticwebassets.runtime.json
+C:\Users\LMI\AppData\Local\Temp\fixit-email-reset-build\Fixit.staticwebassets.endpoints.json
+C:\Users\LMI\AppData\Local\Temp\fixit-email-reset-build\Fixit.exe
+C:\Users\LMI\AppData\Local\Temp\fixit-email-reset-build\Fixit.deps.json
+C:\Users\LMI\AppData\Local\Temp\fixit-email-reset-build\Fixit.runtimeconfig.json
+C:\Users\LMI\AppData\Local\Temp\fixit-email-reset-build\Fixit.dll
+C:\Users\LMI\AppData\Local\Temp\fixit-email-reset-build\Fixit.pdb

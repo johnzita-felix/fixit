@@ -88,6 +88,7 @@
             typeof report.reporter !== 'string' ||
             typeof report.ownerId !== 'string' ||
             typeof report.createdAt !== 'string' ||
+            (report.category !== undefined && typeof report.category !== 'string') ||
             !statusOptions.includes(report.status))) {
             throw new Error('Saved reports are in an unexpected format.');
         }
@@ -128,7 +129,7 @@
             .filter(matchesTab)
             .filter(report => !statusFilter.value || report.status === statusFilter.value)
             .filter(report => !location || report.location.toLowerCase().includes(location))
-            .filter(report => !query || [report.title, report.location, report.description, report.reporter]
+            .filter(report => !query || [report.title, report.location, report.category || 'General', report.description, report.reporter]
                 .some(value => value.toLowerCase().includes(query)))
             .sort((first, second) => sortFilter.value === 'oldest'
                 ? first.createdAt.localeCompare(second.createdAt)
@@ -168,6 +169,7 @@
                     ${adminControls}
                 </div>
                 <h3>${escapeHtml(report.title)}</h3>
+                <span class="report-category">${escapeHtml(report.category || 'General')}</span>
                 <p class="report-location"><svg viewBox="0 0 20 20" aria-hidden="true"><path d="M16 8.3c0 4.1-6 9-6 9s-6-4.9-6-9a6 6 0 1 1 12 0Z"/><circle cx="10" cy="8" r="2"/></svg>${escapeHtml(report.location)}</p>
                 <p class="report-description">${escapeHtml(report.description)}</p>
                 <div class="report-card-footer">
@@ -203,7 +205,7 @@
                 : isAdmin
                     ? 'New campus maintenance reports will show up here.'
                     : 'Notice something that needs attention? Send your first report and help keep campus in good shape.';
-            grid.innerHTML = `<div class="empty-state"><span class="empty-state-icon" aria-hidden="true">✦</span><h3>${title}</h3><p>${description}</p>${!isAdmin && !filtered ? '<button type="button" class="add-report-button" data-empty-add>+ New report</button>' : ''}</div>`;
+            grid.innerHTML = `<div class="empty-state"><span class="empty-state-icon" aria-hidden="true">✦</span><h3>${title}</h3><p>${description}</p></div>`;
         }
     }
 
@@ -245,8 +247,6 @@
             document.getElementById('profile-menu').hidden = true;
             document.getElementById('profile-toggle').setAttribute('aria-expanded', 'false');
         }
-        const addButton = event.target.closest('[data-empty-add]');
-        if (addButton && !storageError) reportDialog.showModal();
     });
 
     document.querySelector('[data-open-settings]').addEventListener('click', () => {
@@ -387,6 +387,7 @@
                     ownerId: clientId,
                     title: formData.get('title').trim(),
                     location: formData.get('location').trim(),
+                    category: formData.get('category').trim(),
                     description: formData.get('description').trim(),
                     reporter: readProfileName(),
                     status: 'New',

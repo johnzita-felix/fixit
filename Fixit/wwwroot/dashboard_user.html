@@ -17,7 +17,7 @@
         </a>
         <label class="dashboard-search">
             <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="10.8" cy="10.8" r="6.8"/><path d="m16 16 4.5 4.5"/></svg>
-            <input id="report-search" type="search" placeholder="Search reports, places, or details" autocomplete="off">
+            <input id="report-search" type="search" aria-label="Search reports" placeholder="Search reports, places, or details" autocomplete="off">
             <span class="search-shortcut" aria-hidden="true">⌕</span>
         </label>
         <div class="profile-area">
@@ -41,7 +41,6 @@
                 <h1>Good things happen when we <span>take care of our campus.</span></h1>
                 <p class="dashboard-description">Spot something that needs attention? Report it and follow every update right here.</p>
             </div>
-            <button type="button" class="add-report-button" id="add-report-button"><span aria-hidden="true">+</span> New report</button>
         </section>
 
         <section class="dashboard-stats" aria-label="Your report summary">
@@ -72,6 +71,10 @@
         <footer class="dashboard-footer">MADE TO KEEP YOUR CAMPUS IN GOOD SHAPE <span>✳</span></footer>
     </main>
 
+    <button type="button" class="dashboard-add-report" id="add-report-button" aria-label="Add report" title="Add report">
+        <span aria-hidden="true">+</span>
+    </button>
+
     <dialog class="dashboard-dialog" id="report-dialog" aria-labelledby="report-dialog-title">
         <form id="report-form" class="dialog-card">
             <button class="dialog-close" type="button" data-close-dialog aria-label="Close">×</button>
@@ -82,6 +85,16 @@
             <input id="report-title" name="title" maxlength="100" placeholder="e.g. Broken light in the hallway" required>
             <label for="report-location">Where is it?</label>
             <input id="report-location" name="location" maxlength="100" placeholder="Building, room, or area" required>
+            <label for="report-category">Category</label>
+            <select id="report-category" name="category" required>
+                <option value="General">General maintenance</option>
+                <option>Electrical</option>
+                <option>Plumbing</option>
+                <option>Cleaning</option>
+                <option>Furniture</option>
+                <option>Safety</option>
+                <option>Other</option>
+            </select>
             <label for="report-description">Add a few details</label>
             <textarea id="report-description" name="description" maxlength="1000" rows="4" placeholder="Tell us what you noticed..." required></textarea>
             <label for="report-image">Photo <span class="optional-label">optional, up to 1 MB</span></label>

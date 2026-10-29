@@ -8,8 +8,8 @@ using Microsoft.AspNetCore.Authentication;
 using Microsoft.AspNetCore.Authentication.Cookies;
 using Microsoft.AspNetCore.Identity;
 using Microsoft.AspNetCore.RateLimiting;
-using Microsoft.AspNetCore.WebUtilities;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.Caching.Memory;
 using Microsoft.Data.Sqlite;
 
 var builder = WebApplication.CreateBuilder(args);
@@ -18,6 +18,7 @@ var databasePath = Path.Combine(builder.Environment.ContentRootPath, "app.db");
 builder.Services.AddDbContext<AppDbContext>(options =>
     options.UseSqlite($"Data Source={databasePath}"));
 builder.Services.AddScoped<IPasswordHasher<AppUser>, PasswordHasher<AppUser>>();
+builder.Services.AddMemoryCache();
 
 builder.Services
     .AddAuthentication(CookieAuthenticationDefaults.AuthenticationScheme)
@@ -39,6 +40,29 @@ builder.Services
             context.Response.StatusCode = StatusCodes.Status403Forbidden;
             return Task.CompletedTask;
         };
+        options.Events.OnValidatePrincipal = async context =>
+        {
+            var userId = context.Principal?.FindFirstValue(ClaimTypes.NameIdentifier);
+            var sessionVersion = context.Principal?.FindFirstValue("fixIt:SessionVersion");
+            if (!int.TryParse(userId, out var parsedUserId) ||
+                !int.TryParse(sessionVersion, out var parsedSessionVersion))
+            {
+                context.RejectPrincipal();
+                await context.HttpContext.SignOutAsync(CookieAuthenticationDefaults.AuthenticationScheme);
+                return;
+            }
+
+            var db = context.HttpContext.RequestServices.GetRequiredService<AppDbContext>();
+            var currentSessionVersion = await db.Users
+                .Where(user => user.Id == parsedUserId)
+                .Select(user => (int?)user.SessionVersion)
+                .SingleOrDefaultAsync();
+            if (currentSessionVersion != parsedSessionVersion)
+            {
+                context.RejectPrincipal();
+                await context.HttpContext.SignOutAsync(CookieAuthenticationDefaults.AuthenticationScheme);
+            }
+        };
     });
 
 builder.Services.AddAuthorization();
@@ -52,6 +76,16 @@ builder.Services.AddRateLimiter(options =>
             {
                 PermitLimit = 10,
                 Window = TimeSpan.FromMinutes(1),
+                QueueLimit = 0,
+                AutoReplenishment = true
+            }));
+    options.AddPolicy("password-reset-request", context =>
+        RateLimitPartition.GetFixedWindowLimiter(
+            partitionKey: context.Connection.RemoteIpAddress?.ToString() ?? "unknown",
+            factory: _ => new FixedWindowRateLimiterOptions
+            {
+                PermitLimit = 5,
+                Window = TimeSpan.FromMinutes(15),
                 QueueLimit = 0,
                 AutoReplenishment = true
             }));
@@ -154,7 +188,8 @@ app.MapPost("/api/login", async (
         new Claim(ClaimTypes.NameIdentifier, user.Id.ToString()),
         new Claim(ClaimTypes.Name, user.Username),
         new Claim(ClaimTypes.Email, user.Email ?? ""),
-        new Claim(ClaimTypes.Role, user.Role == "admin" ? "admin" : "user")
+        new Claim(ClaimTypes.Role, user.Role == "admin" ? "admin" : "user"),
+        new Claim("fixIt:SessionVersion", user.SessionVersion.ToString())
     };
     var identity = new ClaimsIdentity(claims, CookieAuthenticationDefaults.AuthenticationScheme);
     await context.SignInAsync(
@@ -169,8 +204,7 @@ app.MapPost("/api/forgot-password", async (
     ForgotPasswordRequest request,
     AppDbContext db,
     IConfiguration config,
-    IWebHostEnvironment environment,
-    ILogger<Program> logger,
+    IMemoryCache memoryCache,
     HttpContext context) =>
 {
     var email = NormalizeEmail(request.Email);
@@ -178,7 +212,7 @@ app.MapPost("/api/forgot-password", async (
         return Results.BadRequest(new { message = "Enter a valid email address." });
 
     var smtp = SmtpSettings.FromConfiguration(config);
-    if (!smtp.IsConfigured && !environment.IsDevelopment())
+    if (!smtp.IsConfigured)
     {
         return Results.Problem(
             title: "Email recovery is not configured",
@@ -186,48 +220,120 @@ app.MapPost("/api/forgot-password", async (
             statusCode: StatusCodes.Status503ServiceUnavailable);
     }
 
-    var genericMessage = "If an account with that email exists, reset instructions will be sent shortly.";
+    const string genericMessage = "If an account with that email exists, a verification code will be sent shortly.";
+    const int codeLifetimeSeconds = 600;
+    var cooldownKey = $"password-reset:{HashToken(email)}";
+    if (memoryCache.TryGetValue(cooldownKey, out _))
+        return Results.Ok(new { message = genericMessage, expiresInSeconds = codeLifetimeSeconds });
+
+    memoryCache.Set(cooldownKey, true, TimeSpan.FromSeconds(60));
     var user = await db.Users.SingleOrDefaultAsync(u => u.Email == email);
     if (user is null)
-        return Results.Ok(new { message = genericMessage });
+        return Results.Ok(new { message = genericMessage, expiresInSeconds = codeLifetimeSeconds });
 
-    var token = WebEncoders.Base64UrlEncode(RandomNumberGenerator.GetBytes(32));
-    user.PasswordResetTokenHash = HashToken(token);
-    user.PasswordResetTokenExpiresUtc = DateTime.UtcNow.AddMinutes(30);
-    await db.SaveChangesAsync();
-
-    var configuredBaseUrl = config["App:PublicBaseUrl"]?.TrimEnd('/');
-    var baseUrl = !string.IsNullOrWhiteSpace(configuredBaseUrl)
-        ? configuredBaseUrl
-        : $"{context.Request.Scheme}://{context.Request.Host}";
-    var resetUrl = $"{baseUrl}/resetpw.html?token={Uri.EscapeDataString(token)}";
-
-    if (!smtp.IsConfigured)
+    var now = DateTime.UtcNow;
+    var code = RandomNumberGenerator.GetInt32(0, 1_000_000).ToString("D6");
+    var salt = RandomNumberGenerator.GetBytes(16);
+    var resetCode = await db.PasswordResetCodes.SingleOrDefaultAsync(item => item.Email == email);
+    if (resetCode is null)
     {
-        // Development-only fallback. Never log reset tokens in production.
-        logger.LogWarning("SMTP is not configured. Development reset link (valid for 30 minutes): {ResetUrl}", resetUrl);
-        return Results.Ok(new
-        {
-            message = "For local testing, check the server terminal for the reset link. Configure SMTP to deliver reset links by email."
-        });
+        resetCode = new PasswordResetCode { Email = email };
+        db.PasswordResetCodes.Add(resetCode);
     }
+
+    resetCode.CodeHash = HashVerificationCode(code, salt);
+    resetCode.CodeSalt = salt;
+    resetCode.ExpiresUtc = now.AddMinutes(10);
+    resetCode.CreatedUtc = now;
+    resetCode.Attempts = 0;
+    resetCode.ResetGrantHash = null;
+    resetCode.ResetGrantExpiresUtc = null;
+    resetCode.UsedUtc = null;
+    user.PasswordResetTokenHash = null;
+    user.PasswordResetTokenExpiresUtc = null;
+    await db.SaveChangesAsync();
 
     try
     {
-        await SendResetEmailAsync(smtp, email, resetUrl);
-        return Results.Ok(new { message = genericMessage });
+        await SendVerificationCodeEmailAsync(smtp, email, code);
+        return Results.Ok(new { message = genericMessage, expiresInSeconds = codeLifetimeSeconds });
     }
-    catch (Exception ex)
+    catch (SmtpException)
     {
-        logger.LogError(ex, "Failed to send a fixIt password reset email.");
-        user.PasswordResetTokenHash = null;
-        user.PasswordResetTokenExpiresUtc = null;
+        resetCode.CodeHash = null;
+        resetCode.CodeSalt = null;
+        resetCode.UsedUtc = DateTime.UtcNow;
         await db.SaveChangesAsync();
+        memoryCache.Remove(cooldownKey);
+        app.Logger.LogError("Failed to deliver a password recovery verification email.");
         return Results.Problem(
-            title: "Unable to send reset email",
-            detail: "Email delivery failed. Check the SMTP settings and try again.",
+            title: "Unable to send verification code",
+            detail: "Email delivery failed. Please try again later or contact support.",
             statusCode: StatusCodes.Status503ServiceUnavailable);
     }
+}).RequireRateLimiting("auth").RequireRateLimiting("password-reset-request");
+
+app.MapPost("/api/verify-reset-code", async (
+    VerifyResetCodeRequest request,
+    AppDbContext db) =>
+{
+    var email = NormalizeEmail(request.Email);
+    if (string.IsNullOrWhiteSpace(email) || !IsValidEmail(email) ||
+        request.Code is null || request.Code.Length != 6 ||
+        request.Code.Any(character => character is < '0' or > '9'))
+        return Results.BadRequest(new { message = "Enter the six-digit verification code sent to your email." });
+
+    await using var transaction = await db.Database.BeginTransactionAsync();
+    var resetCode = await db.PasswordResetCodes.SingleOrDefaultAsync(item => item.Email == email);
+    if (resetCode is null)
+        return Results.BadRequest(new { message = "That verification code is invalid. Check it and try again." });
+
+    if (resetCode.UsedUtc is not null)
+        return Results.BadRequest(new { message = "That verification code has already been used. Request a new code." });
+
+    if (resetCode.Attempts >= 5)
+        return Results.BadRequest(new { message = "Too many incorrect attempts. Request a new code." });
+
+    if (resetCode.CodeHash is null)
+        return Results.BadRequest(new { message = "That verification code has already been verified or is no longer valid. Request a new code." });
+
+    if (resetCode.ExpiresUtc <= DateTime.UtcNow)
+        return Results.BadRequest(new { message = "That verification code has expired. Request a new code." });
+
+    if (!CryptographicOperations.FixedTimeEquals(
+            resetCode.CodeHash,
+            HashVerificationCode(request.Code, resetCode.CodeSalt!)))
+    {
+        resetCode.Attempts++;
+        if (resetCode.Attempts >= 5)
+        {
+            resetCode.CodeHash = null;
+            resetCode.CodeSalt = null;
+        }
+        await db.SaveChangesAsync();
+        await transaction.CommitAsync();
+        return Results.BadRequest(new
+        {
+            message = resetCode.Attempts >= 5
+                ? "Too many incorrect attempts. Request a new code."
+                : "That verification code is invalid. Check it and try again."
+        });
+    }
+
+    var resetToken = Microsoft.AspNetCore.WebUtilities.WebEncoders.Base64UrlEncode(
+        RandomNumberGenerator.GetBytes(32));
+    resetCode.CodeHash = null;
+    resetCode.CodeSalt = null;
+    resetCode.ResetGrantHash = SHA256.HashData(Encoding.UTF8.GetBytes(resetToken));
+    resetCode.ResetGrantExpiresUtc = DateTime.UtcNow.AddMinutes(10);
+    await db.SaveChangesAsync();
+    await transaction.CommitAsync();
+
+    return Results.Ok(new
+    {
+        message = "Email verified. You can now choose a new password.",
+        resetToken
+    });
 }).RequireRateLimiting("auth");
 
 app.MapPost("/api/reset-password", async (
@@ -235,8 +341,8 @@ app.MapPost("/api/reset-password", async (
     AppDbContext db,
     IPasswordHasher<AppUser> hasher) =>
 {
-    if (string.IsNullOrWhiteSpace(request.Token))
-        return Results.BadRequest(new { message = "This reset link is invalid or expired. Request a new one." });
+    if (string.IsNullOrWhiteSpace(request.ResetToken))
+        return Results.BadRequest(new { message = "Verify your email address before changing your password." });
 
     if (string.IsNullOrEmpty(request.Password) || request.Password.Length < 8 || request.Password.Length > 128)
         return Results.BadRequest(new { message = "Password must contain 8–128 characters." });
@@ -244,17 +350,30 @@ app.MapPost("/api/reset-password", async (
     if (request.Password != request.ConfirmPassword)
         return Results.BadRequest(new { message = "Passwords do not match." });
 
-    var tokenHash = HashToken(request.Token);
-    var user = await db.Users.SingleOrDefaultAsync(u => u.PasswordResetTokenHash == tokenHash);
-    if (user is null ||
-        user.PasswordResetTokenExpiresUtc is null ||
-        user.PasswordResetTokenExpiresUtc.Value <= DateTime.UtcNow)
-        return Results.BadRequest(new { message = "This reset link is invalid or expired. Request a new one." });
+    var grantHash = SHA256.HashData(Encoding.UTF8.GetBytes(request.ResetToken));
+    await using var transaction = await db.Database.BeginTransactionAsync();
+    var resetCode = await db.PasswordResetCodes.SingleOrDefaultAsync(item =>
+        item.ResetGrantHash == grantHash);
+    if (resetCode is null || resetCode.UsedUtc is not null)
+        return Results.BadRequest(new { message = "This password reset authorization is invalid or has already been used. Verify your email again." });
+
+    if (resetCode.ResetGrantExpiresUtc is null ||
+        resetCode.ResetGrantExpiresUtc <= DateTime.UtcNow)
+        return Results.BadRequest(new { message = "Your verified session has expired. Request a new verification code." });
+
+    var user = await db.Users.SingleOrDefaultAsync(item => item.Email == resetCode.Email);
+    if (user is null)
+        return Results.BadRequest(new { message = "This password reset authorization is invalid or has already been used. Verify your email again." });
 
     user.PasswordHash = hasher.HashPassword(user, request.Password);
     user.PasswordResetTokenHash = null;
     user.PasswordResetTokenExpiresUtc = null;
+    user.SessionVersion++;
+    resetCode.ResetGrantHash = null;
+    resetCode.ResetGrantExpiresUtc = null;
+    resetCode.UsedUtc = DateTime.UtcNow;
     await db.SaveChangesAsync();
+    await transaction.CommitAsync();
 
     return Results.Ok(new { message = "Password updated successfully. You can now sign in." });
 }).RequireRateLimiting("auth");
@@ -291,6 +410,9 @@ static bool IsValidEmail(string email)
 static string HashToken(string token) =>
     Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(token)));
 
+static byte[] HashVerificationCode(string code, byte[] salt) =>
+    Rfc2898DeriveBytes.Pbkdf2(code, salt, 210_000, HashAlgorithmName.SHA256, 32);
+
 static async Task EnsureAuthColumnsAsync(AppDbContext db)
 {
     var connection = db.Database.GetDbConnection();
@@ -321,6 +443,7 @@ static async Task EnsureAuthColumnsAsync(AppDbContext db)
         await AddColumnIfMissing("PasswordResetTokenHash", "TEXT");
         await AddColumnIfMissing("PasswordResetTokenExpiresUtc", "TEXT");
         await AddColumnIfMissing("Role", "TEXT NOT NULL DEFAULT 'user'");
+        await AddColumnIfMissing("SessionVersion", "INTEGER NOT NULL DEFAULT 0");
 
         await using (var command = connection.CreateCommand())
         {
@@ -331,6 +454,17 @@ static async Task EnsureAuthColumnsAsync(AppDbContext db)
                 CREATE UNIQUE INDEX IF NOT EXISTS "IX_Users_PasswordResetTokenHash"
                 ON "Users" ("PasswordResetTokenHash")
                 WHERE "PasswordResetTokenHash" IS NOT NULL;
+                CREATE TABLE IF NOT EXISTS "PasswordResetCodes" (
+                    "Email" TEXT NOT NULL CONSTRAINT "PK_PasswordResetCodes" PRIMARY KEY,
+                    "CodeHash" BLOB NULL,
+                    "CodeSalt" BLOB NULL,
+                    "ExpiresUtc" TEXT NOT NULL,
+                    "CreatedUtc" TEXT NOT NULL,
+                    "Attempts" INTEGER NOT NULL,
+                    "ResetGrantHash" BLOB NULL,
+                    "ResetGrantExpiresUtc" TEXT NULL,
+                    "UsedUtc" TEXT NULL
+                );
                 """;
             await command.ExecuteNonQueryAsync();
         }
@@ -341,30 +475,17 @@ static async Task EnsureAuthColumnsAsync(AppDbContext db)
     }
 }
 
-static async Task SendResetEmailAsync(SmtpSettings settings, string toEmail, string resetUrl)
+static async Task SendVerificationCodeEmailAsync(SmtpSettings settings, string toEmail, string code)
 {
     using var message = new MailMessage
     {
         From = new MailAddress(settings.FromEmail!, settings.FromName),
-        Subject = "Reset your fixIt password",
-        IsBodyHtml = true,
-        Body = $"""
-            <!doctype html>
-            <html><body style="font-family:Arial,sans-serif;color:#1f2937;line-height:1.6">
-              <div style="max-width:560px;margin:24px auto;padding:28px;border:1px solid #e5e7eb;border-radius:14px">
-                <h1 style="color:#123c67;margin-top:0">fixIt</h1>
-                <h2>Password reset request</h2>
-                <p>We received a request to reset the password for your fixIt account.</p>
-                <p><a href="{WebUtility.HtmlEncode(resetUrl)}" style="display:inline-block;background:#123c67;color:#fff;padding:12px 18px;border-radius:8px;text-decoration:none">Choose a new password</a></p>
-                <p>This link expires in <strong>30 minutes</strong> and can only be used once.</p>
-                <p>If you did not request this, you can ignore this email. Your password will not change.</p>
-              </div>
-            </body></html>
-            """
+        Subject = "Your fixIt verification code",
+        Body = $"Your fixIt password-reset verification code is {code}.\n\nIt expires in 10 minutes and can only be used once. If you did not request this code, you can ignore this email."
     };
     message.To.Add(new MailAddress(toEmail));
     message.AlternateViews.Add(AlternateView.CreateAlternateViewFromString(
-        $"We received a request to reset your fixIt password. Open this link within 30 minutes: {resetUrl}\nIf you did not request this, ignore this email.",
+        $"Your fixIt password-reset verification code is {code}.\n\nIt expires in 10 minutes and can only be used once. If you did not request this code, you can ignore this email.",
         Encoding.UTF8,
         "text/plain"));
 
@@ -382,7 +503,8 @@ static async Task SendResetEmailAsync(SmtpSettings settings, string toEmail, str
 public record RegisterRequest(string? Username, string? Email, string? Password, string? ConfirmPassword);
 public record LoginRequest(string? Email, string? Password);
 public record ForgotPasswordRequest(string? Email);
-public record ResetPasswordRequest(string? Token, string? Password, string? ConfirmPassword);
+public record VerifyResetCodeRequest(string? Email, string? Code);
+public record ResetPasswordRequest(string? ResetToken, string? Password, string? ConfirmPassword);
 
 public sealed class SmtpSettings
 {
@@ -424,11 +546,26 @@ public class AppUser
     public string Role { get; set; } = "user";
     public string? PasswordResetTokenHash { get; set; }
     public DateTime? PasswordResetTokenExpiresUtc { get; set; }
+    public int SessionVersion { get; set; }
+}
+
+public class PasswordResetCode
+{
+    public string Email { get; set; } = "";
+    public byte[]? CodeHash { get; set; }
+    public byte[]? CodeSalt { get; set; }
+    public DateTime ExpiresUtc { get; set; }
+    public DateTime CreatedUtc { get; set; }
+    public int Attempts { get; set; }
+    public byte[]? ResetGrantHash { get; set; }
+    public DateTime? ResetGrantExpiresUtc { get; set; }
+    public DateTime? UsedUtc { get; set; }
 }
 
 public class AppDbContext(DbContextOptions<AppDbContext> options) : DbContext(options)
 {
     public DbSet<AppUser> Users => Set<AppUser>();
+    public DbSet<PasswordResetCode> PasswordResetCodes => Set<PasswordResetCode>();
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
@@ -438,5 +575,7 @@ public class AppDbContext(DbContextOptions<AppDbContext> options) : DbContext(op
             .HasFilter("\"Email\" IS NOT NULL AND \"Email\" <> ''");
         user.HasIndex(x => x.PasswordResetTokenHash).IsUnique()
             .HasFilter("\"PasswordResetTokenHash\" IS NOT NULL");
+
+        modelBuilder.Entity<PasswordResetCode>().HasKey(x => x.Email);
     }
 }
