@@ -9,7 +9,6 @@ using Microsoft.AspNetCore.Authentication.Cookies;
 using Microsoft.AspNetCore.Identity;
 using Microsoft.AspNetCore.RateLimiting;
 using Microsoft.EntityFrameworkCore;
-using Microsoft.Extensions.Caching.Memory;
 using Microsoft.Data.Sqlite;
 
 var builder = WebApplication.CreateBuilder(args);
@@ -18,7 +17,6 @@ var databasePath = Path.Combine(builder.Environment.ContentRootPath, "app.db");
 builder.Services.AddDbContext<AppDbContext>(options =>
     options.UseSqlite($"Data Source={databasePath}"));
 builder.Services.AddScoped<IPasswordHasher<AppUser>, PasswordHasher<AppUser>>();
-builder.Services.AddMemoryCache();
 
 builder.Services
     .AddAuthentication(CookieAuthenticationDefaults.AuthenticationScheme)
@@ -44,13 +42,13 @@ builder.Services
         {
             var userId = context.Principal?.FindFirstValue(ClaimTypes.NameIdentifier);
             var sessionVersion = context.Principal?.FindFirstValue("fixIt:SessionVersion");
-            if (!int.TryParse(userId, out var parsedUserId) ||
-                !int.TryParse(sessionVersion, out var parsedSessionVersion))
+            if (!int.TryParse(userId, out var parsedUserId))
             {
                 context.RejectPrincipal();
                 await context.HttpContext.SignOutAsync(CookieAuthenticationDefaults.AuthenticationScheme);
                 return;
             }
+            var parsedSessionVersion = int.TryParse(sessionVersion, out var version) ? version : 0;
 
             var db = context.HttpContext.RequestServices.GetRequiredService<AppDbContext>();
             var currentSessionVersion = await db.Users
@@ -203,9 +201,7 @@ app.MapPost("/api/login", async (
 app.MapPost("/api/forgot-password", async (
     ForgotPasswordRequest request,
     AppDbContext db,
-    IConfiguration config,
-    IMemoryCache memoryCache,
-    HttpContext context) =>
+    IConfiguration config) =>
 {
     var email = NormalizeEmail(request.Email);
     if (string.IsNullOrWhiteSpace(email) || !IsValidEmail(email))
@@ -222,19 +218,17 @@ app.MapPost("/api/forgot-password", async (
 
     const string genericMessage = "If an account with that email exists, a verification code will be sent shortly.";
     const int codeLifetimeSeconds = 600;
-    var cooldownKey = $"password-reset:{HashToken(email)}";
-    if (memoryCache.TryGetValue(cooldownKey, out _))
-        return Results.Ok(new { message = genericMessage, expiresInSeconds = codeLifetimeSeconds });
-
-    memoryCache.Set(cooldownKey, true, TimeSpan.FromSeconds(60));
     var user = await db.Users.SingleOrDefaultAsync(u => u.Email == email);
     if (user is null)
         return Results.Ok(new { message = genericMessage, expiresInSeconds = codeLifetimeSeconds });
 
     var now = DateTime.UtcNow;
+    var resetCode = await db.PasswordResetCodes.SingleOrDefaultAsync(item => item.Email == email);
+    if (resetCode is not null && resetCode.CreatedUtc.AddSeconds(60) > now)
+        return Results.Ok(new { message = genericMessage, expiresInSeconds = codeLifetimeSeconds });
+
     var code = RandomNumberGenerator.GetInt32(0, 1_000_000).ToString("D6");
     var salt = RandomNumberGenerator.GetBytes(16);
-    var resetCode = await db.PasswordResetCodes.SingleOrDefaultAsync(item => item.Email == email);
     if (resetCode is null)
     {
         resetCode = new PasswordResetCode { Email = email };
@@ -263,8 +257,8 @@ app.MapPost("/api/forgot-password", async (
         resetCode.CodeHash = null;
         resetCode.CodeSalt = null;
         resetCode.UsedUtc = DateTime.UtcNow;
+        resetCode.CreatedUtc = DateTime.UtcNow.AddSeconds(-60);
         await db.SaveChangesAsync();
-        memoryCache.Remove(cooldownKey);
         app.Logger.LogError("Failed to deliver a password recovery verification email.");
         return Results.Problem(
             title: "Unable to send verification code",
@@ -406,9 +400,6 @@ static bool IsValidEmail(string email)
     }
     catch { return false; }
 }
-
-static string HashToken(string token) =>
-    Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(token)));
 
 static byte[] HashVerificationCode(string code, byte[] salt) =>
     Rfc2898DeriveBytes.Pbkdf2(code, salt, 210_000, HashAlgorithmName.SHA256, 32);
