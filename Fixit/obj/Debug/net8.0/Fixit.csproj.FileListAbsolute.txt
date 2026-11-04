@@ -74,3 +74,12 @@ C:\Users\LMI\AppData\Local\Temp\fixit-email-reset-build\Fixit.deps.json
 C:\Users\LMI\AppData\Local\Temp\fixit-email-reset-build\Fixit.runtimeconfig.json
 C:\Users\LMI\AppData\Local\Temp\fixit-email-reset-build\Fixit.dll
 C:\Users\LMI\AppData\Local\Temp\fixit-email-reset-build\Fixit.pdb
+C:\Users\LMI\AppData\Local\Temp\fixit-ux-build\appsettings.Development.json
+C:\Users\LMI\AppData\Local\Temp\fixit-ux-build\appsettings.json
+C:\Users\LMI\AppData\Local\Temp\fixit-ux-build\Fixit.staticwebassets.runtime.json
+C:\Users\LMI\AppData\Local\Temp\fixit-ux-build\Fixit.staticwebassets.endpoints.json
+C:\Users\LMI\AppData\Local\Temp\fixit-ux-build\Fixit.exe
+C:\Users\LMI\AppData\Local\Temp\fixit-ux-build\Fixit.deps.json
+C:\Users\LMI\AppData\Local\Temp\fixit-ux-build\Fixit.runtimeconfig.json
+C:\Users\LMI\AppData\Local\Temp\fixit-ux-build\Fixit.dll
+C:\Users\LMI\AppData\Local\Temp\fixit-ux-build\Fixit.pdb

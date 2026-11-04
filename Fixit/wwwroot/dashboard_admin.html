@@ -3,120 +3,172 @@
 <head>
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
-    <meta name="theme-color" content="#123c67">
-    <meta name="description" content="Review and manage school maintenance reports with fixIt.">
+    <meta name="theme-color" content="#76283a">
+    <meta name="description" content="Organize and manage LIFE Institute Mariveles maintenance reports.">
     <title>Maintenance desk | fixIt</title>
-    <link rel="stylesheet" href="login.css">
+    <link rel="stylesheet" href="app.css">
     <script src="dashboard.js" defer></script>
 </head>
-<body class="dashboard-page" data-role="admin">
-    <header class="dashboard-header">
-        <a class="dashboard-brand" href="index.html" aria-label="fixIt home">
-            <span class="brand-mark" aria-hidden="true">✦</span>
-            <span>fix<span class="brand-highlight">It</span></span>
+<body class="app-shell admin-shell" data-role="admin" data-page="admin">
+    <header class="topbar">
+        <a class="school-brand" href="dashboard_admin.html" aria-label="LIFE Institute Mariveles fixIt maintenance desk">
+            <span class="school-monogram" aria-hidden="true">LI</span>
+            <span class="school-name">LIFE Institute <small>Mariveles · fixIt</small></span>
         </a>
-        <label class="dashboard-search">
-            <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="10.8" cy="10.8" r="6.8"/><path d="m16 16 4.5 4.5"/></svg>
-            <input id="report-search" type="search" aria-label="Search reports" placeholder="Search reports, places, or details" autocomplete="off">
-            <span class="search-shortcut" aria-hidden="true">⌕</span>
-        </label>
-        <div class="profile-area">
-            <button class="profile-button" id="profile-toggle" type="button" aria-expanded="false" aria-controls="profile-menu" aria-label="Open profile menu">
-                <span class="profile-avatar" id="profile-avatar">M</span>
-                <span class="profile-name" id="profile-name">Maintenance team</span>
-                <svg class="profile-chevron" viewBox="0 0 20 20" aria-hidden="true"><path d="m5 7.5 5 5 5-5"/></svg>
+        <span class="role-label">MAINTENANCE DESK</span>
+        <div class="account-menu">
+            <button class="account-trigger" id="profile-toggle" type="button" aria-expanded="false" aria-controls="profile-menu">
+                <span class="account-avatar" id="profile-avatar">A</span>
+                <span class="account-name" id="profile-name">Administrator</span>
+                <span class="chevron" aria-hidden="true">⌄</span>
             </button>
-            <div class="profile-menu" id="profile-menu" hidden>
-                <div class="profile-menu-heading"><span class="profile-avatar profile-avatar-small" id="menu-avatar">M</span><span><strong id="menu-name">Maintenance team</strong><small>School community</small></span></div>
-                <button type="button" data-open-settings>Settings</button>
-                <button type="button" class="logout-button" data-logout>Log out</button>
+            <div class="account-popover" id="profile-menu" hidden>
+                <p class="account-popover-name" id="menu-name">Administrator</p>
+                <button type="button" data-open-settings>Profile settings</button>
+                <button type="button" data-logout>Sign out</button>
             </div>
         </div>
     </header>
 
-    <main class="dashboard-main">
-        <section class="dashboard-intro admin-intro">
-            <div>
-                <p class="dashboard-eyebrow"><span class="eyebrow-dot"></span> MAINTENANCE DESK</p>
-                <h1>A campus that works <span>starts with your team.</span></h1>
-                <p class="dashboard-description">Review incoming reports, keep everyone updated, and get campus fixes moving.</p>
+    <div class="admin-layout">
+        <nav class="admin-nav" aria-label="Administrator navigation">
+            <p class="nav-caption">WORKSPACE</p>
+            <button class="admin-nav-link is-active" type="button" data-view="overview"><span aria-hidden="true">◫</span> Overview</button>
+            <button class="admin-nav-link" type="button" data-view="reports"><span aria-hidden="true">▤</span> Report management</button>
+            <button class="admin-nav-link" type="button" data-view="verification"><span aria-hidden="true">◎</span> Student verification <span class="nav-count" id="verification-count" hidden></span></button>
+            <button class="admin-nav-link" type="button" data-view="directory"><span aria-hidden="true">▦</span> Class directory</button>
+            <div class="nav-school-note"><span class="school-monogram small-monogram" aria-hidden="true">LI</span><span>LIFE Institute<br><small>Mariveles</small></span></div>
+        </nav>
+
+        <main class="admin-main">
+            <section class="admin-panel" data-panel="overview" aria-labelledby="admin-title">
+                <div class="admin-page-heading">
+                    <div><p class="eyebrow">SCHOOL-WIDE SNAPSHOT</p><h1 id="admin-title">Maintenance overview</h1><p class="lede">A clear view of reports that need attention across campus.</p></div>
+                    <button class="button button-outline" type="button" data-view-button="reports">Open report folders <span aria-hidden="true">→</span></button>
+                </div>
+                <div class="admin-metrics" aria-label="Report totals">
+                    <div class="metric-item"><span>Total reports</span><strong id="overview-total">—</strong></div>
+                    <div class="metric-item"><span>Pending review</span><strong id="overview-pending">—</strong></div>
+                    <div class="metric-item"><span>In progress</span><strong id="overview-progress">—</strong></div>
+                    <div class="metric-item"><span>Resolved</span><strong id="overview-resolved">—</strong></div>
+                </div>
+                <div class="overview-grid">
+                    <section class="content-section">
+                        <div class="section-title-row"><div><p class="eyebrow">VERIFIED CLASSES</p><h2>Reports by grade level</h2></div></div>
+                        <div id="overview-grades" class="overview-grade-list"><p class="loading-state">Loading school totals…</p></div>
+                    </section>
+                    <section class="content-section">
+                        <div class="section-title-row"><div><p class="eyebrow">RECENT CHANGES</p><h2>Administrative activity</h2></div></div>
+                        <ol id="overview-activity" class="activity-list"><li class="loading-state">Loading activity…</li></ol>
+                    </section>
+                </div>
+                <p class="page-message" id="dashboard-message" role="status" aria-live="polite"></p>
+            </section>
+
+            <section class="admin-panel" data-panel="reports" aria-labelledby="folders-title" hidden>
+                <div class="admin-page-heading">
+                    <div><p class="eyebrow">GRADE LEVEL → SECTION → REPORTS</p><h1 id="folders-title">Report management</h1><p class="lede">Open a class folder to review its verified students’ submissions.</p></div>
+                </div>
+                <nav class="folder-breadcrumbs" id="folder-breadcrumbs" aria-label="Report folder location"></nav>
+                <div class="folder-toolbar" id="folder-toolbar" hidden>
+                    <label class="filter-search">Search in this section<input id="folder-search" type="search" placeholder="Title, student, place, or details"></label>
+                    <label>Status<select id="folder-status"><option value="">All statuses</option><option>Pending</option><option>Acknowledged</option><option>In Progress</option><option>Resolved</option><option>Rejected</option></select></label>
+                    <label>Category<select id="folder-category"><option value="">All categories</option><option>General</option><option>Electrical</option><option>Plumbing</option><option>Cleaning</option><option>Furniture</option><option>Safety</option><option>Other</option></select></label>
+                    <label>Sort<select id="folder-sort"><option value="newest">Newest first</option><option value="oldest">Oldest first</option><option value="status">Status</option><option value="priority">Priority</option></select></label>
+                    <button class="button button-quiet" id="folder-clear" type="button">Clear</button>
+                </div>
+                <div id="folder-content" class="folder-content" aria-live="polite"><p class="loading-state">Loading report folders…</p></div>
+            </section>
+
+            <section class="admin-panel" data-panel="verification" aria-labelledby="verification-title" hidden>
+                <div class="admin-page-heading">
+                    <div><p class="eyebrow">CLASS PLACEMENT REVIEW</p><h1 id="verification-title">Student verification</h1><p class="lede">Confirm or correct the class information students submitted. Unverified reports stay outside confirmed class folders.</p></div>
+                </div>
+                <div id="verification-list" class="verification-list" aria-live="polite"><p class="loading-state">Loading student submissions…</p></div>
+                <section class="verified-students-section" aria-labelledby="verified-students-title">
+                    <div class="section-title-row"><div><p class="eyebrow">CURRENT CLASS ASSIGNMENTS</p><h2 id="verified-students-title">Find a verified student</h2></div></div>
+                    <label class="filter-search">Search by student name or email<input id="verified-students-search" type="search" placeholder="Search students"></label>
+                    <div id="verified-students-list" class="verification-list" aria-live="polite"><p class="loading-state">Loading verified students…</p></div>
+                </section>
+            </section>
+
+            <section class="admin-panel" data-panel="directory" aria-labelledby="directory-title" hidden>
+                <div class="admin-page-heading">
+                    <div><p class="eyebrow">CONFIGURED BY SCHOOL STAFF</p><h1 id="directory-title">Class directory</h1><p class="lede">Add the official grade levels and sections used for registration, verification, and report folders.</p></div>
+                </div>
+                <div class="directory-forms">
+                    <form id="grade-form" class="directory-form">
+                        <label for="grade-name">Add a grade level</label>
+                        <div class="inline-form"><input id="grade-name" name="name" maxlength="40" placeholder="e.g. Grade 7" required><button class="button button-primary" type="submit">Add grade</button></div>
+                        <p class="field-error" id="grade-error" role="alert"></p>
+                    </form>
+                    <form id="section-form" class="directory-form">
+                        <label for="section-grade">Add a section</label>
+                        <div class="inline-form"><select id="section-grade" required><option value="">Choose a grade</option></select><input id="section-name" name="name" maxlength="80" placeholder="Official section name" required><button class="button button-outline" type="submit">Add section</button></div>
+                        <p class="field-error" id="section-error" role="alert"></p>
+                    </form>
+                </div>
+                <div id="directory-list" class="directory-list" aria-live="polite"><p class="loading-state">Loading class directory…</p></div>
+            </section>
+        </main>
+    </div>
+    <button class="report-fab" type="button" data-open-report aria-label="Create a maintenance report" title="Create a report">+</button>
+
+    <dialog class="app-dialog" id="report-dialog" aria-labelledby="report-dialog-title">
+        <form class="dialog-panel" id="report-form">
+            <button class="dialog-x" type="button" data-close-dialog aria-label="Close dialog">×</button>
+            <p class="eyebrow">CAMPUS MAINTENANCE</p>
+            <h2 id="report-dialog-title">Create a report</h2>
+            <p class="dialog-copy">This report will be submitted under your administrator account and appear outside class folders until assigned to a verified class.</p>
+            <label for="report-title">Report title</label>
+            <input id="report-title" name="title" maxlength="100" placeholder="e.g. Broken light near the library" required>
+            <div class="form-pair">
+                <div><label for="report-category">Category</label><select id="report-category" name="category" required>
+                    <option value="">Choose a category</option><option>General</option><option>Electrical</option><option>Plumbing</option><option>Cleaning</option><option>Furniture</option><option>Safety</option><option>Other</option>
+                </select></div>
+                <div><label for="report-location">Building or location</label><input id="report-location" name="location" maxlength="160" placeholder="Building, room, or area" required></div>
             </div>
-            <div class="admin-intro-note"><span class="admin-note-icon" aria-hidden="true">✦</span><span><strong>Every fix matters.</strong><small>Thanks for taking care of campus.</small></span></div>
-        </section>
-
-        <section class="dashboard-stats" aria-label="Maintenance report summary">
-            <article class="stat-card"><span class="stat-icon stat-icon-blue" aria-hidden="true">◎</span><span><small>All reports</small><strong id="stat-total">0</strong></span></article>
-            <article class="stat-card"><span class="stat-icon stat-icon-gold" aria-hidden="true">◷</span><span><small>Needs attention</small><strong id="stat-active">0</strong></span></article>
-            <article class="stat-card"><span class="stat-icon stat-icon-green" aria-hidden="true">✓</span><span><small>Resolved</small><strong id="stat-resolved">0</strong></span></article>
-        </section>
-
-        <section class="reports-section" aria-labelledby="reports-heading">
-            <div class="section-heading">
-                <div><p class="section-kicker">KEEP CAMPUS RUNNING</p><h2 id="reports-heading">Report queue</h2></div>
-                <button class="filter-toggle" id="filter-toggle" type="button" aria-expanded="false" aria-controls="filter-panel"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 6h16M7 12h10m-7 6h4"/><circle cx="8" cy="6" r="1.5"/><circle cx="15" cy="12" r="1.5"/><circle cx="12" cy="18" r="1.5"/></svg> Filter &amp; sort <span class="filter-chevron" aria-hidden="true">⌄</span></button>
-            </div>
-            <nav class="report-tabs" aria-label="Report queue views">
-                <button class="report-tab is-active" type="button" data-tab="all">All reports <span id="tab-count-all">0</span></button>
-                <button class="report-tab" type="button" data-tab="attention">Needs attention</button>
-                <button class="report-tab" type="button" data-tab="progress">In progress</button>
-                <button class="report-tab" type="button" data-tab="resolved">Resolved</button>
-            </nav>
-            <div class="filter-panel" id="filter-panel" hidden>
-                <label>Status<select id="status-filter"><option value="">All statuses</option><option>New</option><option>Seen</option><option>In progress</option><option>Fixed</option><option>Closed</option></select></label>
-                <label>Location<input id="location-filter" type="search" placeholder="e.g. Science block"></label>
-                <label>Sort by<select id="sort-filter"><option value="newest">Newest first</option><option value="oldest">Oldest first</option></select></label>
-                <button type="button" class="clear-filters" id="clear-filters">Clear filters</button>
-            </div>
-            <div class="dashboard-message" id="dashboard-message" role="status" aria-live="polite"></div>
-            <div class="report-grid" id="report-grid" aria-live="polite"></div>
-        </section>
-        <footer class="dashboard-footer">MADE TO KEEP YOUR CAMPUS IN GOOD SHAPE <span>✳</span></footer>
-    </main>
-
-    <button type="button" class="dashboard-add-report" id="add-report-button" aria-label="Add report" title="Add report">
-        <span aria-hidden="true">+</span>
-    </button>
-
-    <dialog class="dashboard-dialog" id="report-dialog" aria-labelledby="report-dialog-title">
-        <form id="report-form" class="dialog-card">
-            <button class="dialog-close" type="button" data-close-dialog aria-label="Close">×</button>
-            <p class="section-kicker">HELP US TAKE A LOOK</p>
-            <h2 id="report-dialog-title">New maintenance report</h2>
-            <p class="dialog-description">Share what needs attention and where you spotted it.</p>
-            <label for="report-title">What needs fixing?</label>
-            <input id="report-title" name="title" maxlength="100" placeholder="e.g. Broken light in the hallway" required>
-            <label for="report-location">Where is it?</label>
-            <input id="report-location" name="location" maxlength="100" placeholder="Building, room, or area" required>
-            <label for="report-category">Category</label>
-            <select id="report-category" name="category" required>
-                <option value="General">General maintenance</option>
-                <option>Electrical</option>
-                <option>Plumbing</option>
-                <option>Cleaning</option>
-                <option>Furniture</option>
-                <option>Safety</option>
-                <option>Other</option>
-            </select>
-            <label for="report-description">Add a few details</label>
-            <textarea id="report-description" name="description" maxlength="1000" rows="4" placeholder="Tell us what you noticed..." required></textarea>
-            <label for="report-image">Photo <span class="optional-label">optional, up to 1 MB</span></label>
-            <input id="report-image" name="image" type="file" accept="image/*">
-            <p class="dialog-error" id="report-error" role="alert"></p>
-            <button class="add-report-button dialog-submit" type="submit">Submit report <span aria-hidden="true">→</span></button>
+            <label for="report-description">What needs attention?</label>
+            <textarea id="report-description" name="description" maxlength="1000" rows="4" placeholder="Add details that will help the team understand the issue." required></textarea>
+            <label for="report-image">Photo <span class="label-muted">optional · JPEG, PNG, GIF, or WebP up to 1 MB</span></label>
+            <input id="report-image" name="image" type="file" accept="image/jpeg,image/png,image/gif,image/webp">
+            <div class="image-preview" id="image-preview"></div>
+            <p class="field-error" id="report-error" role="alert"></p>
+            <button class="button button-primary button-wide" type="submit">Create report</button>
         </form>
     </dialog>
 
-    <dialog class="dashboard-dialog" id="settings-dialog" aria-labelledby="settings-dialog-title">
-        <form id="settings-form" class="dialog-card">
-            <button class="dialog-close" type="button" data-close-dialog aria-label="Close">×</button>
-            <p class="section-kicker">YOUR ACCOUNT</p>
-            <h2 id="settings-dialog-title">Profile settings</h2>
-            <p class="dialog-description">Choose how your name appears when you manage reports in this browser.</p>
-            <label for="settings-name">Display name</label>
-            <input id="settings-name" name="name" maxlength="60" required>
-            <p class="dialog-error" id="settings-error" role="alert"></p>
-            <button class="add-report-button dialog-submit" type="submit">Save settings <span aria-hidden="true">→</span></button>
+    <dialog class="app-dialog" id="report-details-dialog" aria-labelledby="details-title">
+        <article class="dialog-panel details-panel admin-details-panel">
+            <button class="dialog-x" type="button" data-close-dialog aria-label="Close dialog">×</button>
+            <div id="admin-report-details"><p class="loading-state">Loading report…</p></div>
+            <form id="admin-report-form" class="admin-report-form" hidden>
+                <h3>Maintenance action</h3>
+                <label for="admin-status">Status</label>
+                <select id="admin-status" name="status"><option>Pending</option><option>Acknowledged</option><option>In Progress</option><option>Resolved</option><option>Rejected</option></select>
+                <div class="form-pair">
+                    <div><label for="admin-priority">Priority</label><select id="admin-priority" name="priority"><option>Low</option><option>Normal</option><option>High</option></select></div>
+                    <div><label for="admin-assignee">Assigned to</label><input id="admin-assignee" name="assignee" maxlength="60" placeholder="Optional maintenance staff"></div>
+                </div>
+                <label for="admin-public-update">Update for student</label>
+                <textarea id="admin-public-update" name="publicUpdate" maxlength="500" rows="2" placeholder="Visible to the student"></textarea>
+                <label for="admin-notes">Internal admin notes</label>
+                <textarea id="admin-notes" name="adminNotes" maxlength="1000" rows="3" placeholder="Visible only to administrators"></textarea>
+                <p class="field-error" id="admin-report-error" role="alert"></p>
+                <div class="dialog-actions"><button class="button button-primary" type="submit">Save updates</button><button class="button button-danger-quiet" type="button" id="delete-report">Delete report</button></div>
+            </form>
+        </article>
+    </dialog>
+
+    <dialog class="app-dialog" id="settings-dialog" aria-labelledby="settings-title">
+        <form class="dialog-panel" id="settings-form">
+            <button class="dialog-x" type="button" data-close-dialog aria-label="Close dialog">×</button>
+            <p class="eyebrow">YOUR ACCOUNT</p><h2 id="settings-title">Profile settings</h2>
+            <label for="settings-name">Display name</label><input id="settings-name" name="username" maxlength="50" required>
+            <p class="field-error" id="settings-error" role="alert"></p>
+            <button class="button button-primary button-wide" type="submit">Save changes</button>
         </form>
     </dialog>
+    <p class="page-message admin-global-message" id="admin-global-message" role="status" aria-live="polite"></p>
 </body>
 </html>

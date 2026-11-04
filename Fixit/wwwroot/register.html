@@ -3,11 +3,10 @@
 <head>
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
-    <meta name="theme-color" content="#123c67">
+    <meta name="theme-color" content="#76283a">
     <meta name="description" content="Create your fixIt school maintenance tracker account.">
     <title>Create an account | fixIt</title>
-    <link rel="stylesheet" href="login.css">
-    <link rel="stylesheet" href="register.css">
+    <link rel="stylesheet" href="app.css">
     <style>
         .registerpw .input-wrap,
         .register-field .input-wrap { gap: 8px; }
@@ -16,14 +15,14 @@
             border: 0;
             padding: 6px 2px;
             background: transparent;
-            color: #1b5a91;
+            color: #76283a;
             cursor: pointer;
             font: inherit;
             font-size: 11px;
             font-weight: 700;
         }
         .password-toggle:focus-visible {
-            outline: 2px solid #1b5a91;
+            outline: 2px solid #76283a;
             outline-offset: 2px;
             border-radius: 4px;
         }
@@ -32,13 +31,13 @@
 <body>
     <main class="login-layout">
         <section class="welcome-panel" aria-labelledby="welcome-heading">
-            <a class="brand" href="index.html" aria-label="fixIt home">
+            <a class="brand" href="index.html" aria-label="LIFE Institute Mariveles fixIt">
                 <span class="brand-mark" aria-hidden="true">
                     <svg viewBox="0 0 32 32" fill="none">
                         <path d="M18.2 3.5a8.4 8.4 0 0 0-8.6 10.8L3.9 20a3.5 3.5 0 0 0 5 5l5.7-5.7a8.4 8.4 0 0 0 10.8-8.6l-4.6 4.6-4.7-1.2-1.2-4.7 4.6-4.6a8.4 8.4 0 0 0-1.3-1.3Z" fill="currentColor"/>
                     </svg>
                 </span>
-                <span>fix<span class="brand-highlight">It</span></span>
+                <span>fix<span class="brand-highlight">It</span><small>LIFE Institute Mariveles</small></span>
             </a>
 
             <div class="welcome-copy">
@@ -69,7 +68,7 @@
         </section>
 
         <section class="form-panel" aria-labelledby="register-heading">
-            <a class="mobile-brand" href="index.html" aria-label="fixIt home"><span class="brand-mark" aria-hidden="true">✦</span> fix<span class="brand-highlight">It</span></a>
+            <a class="mobile-brand" href="index.html" aria-label="LIFE Institute Mariveles fixIt"><span class="brand-mark" aria-hidden="true">LI</span> fix<span class="brand-highlight">It</span></a>
             <div class="form-card register-card">
                 <div class="form-heading">
                     <p class="form-eyebrow">GET STARTED</p>
@@ -96,6 +95,16 @@
                             </svg>
                             <input type="email" id="email" name="email" placeholder="you@school.edu" autocomplete="email" required>
                         </div>
+                    </div>
+
+                    <div class="register-field">
+                        <label for="register-grade">Grade level <span class="label-muted">class placement is verified by an administrator</span></label>
+                        <select id="register-grade" name="gradeLevelId"><option value="">Loading class directory…</option></select>
+                    </div>
+                    <div class="register-field">
+                        <label for="register-section">Section</label>
+                        <select id="register-section" name="sectionId" disabled><option value="">Choose a grade first</option></select>
+                        <small class="class-help" id="class-help">Choose the class you currently attend.</small>
                     </div>
 
                     <div class="registerpw">
@@ -134,6 +143,45 @@
         </section>
     </main>
 <script>
+let registerClasses = [];
+const gradeSelect = document.getElementById('register-grade');
+const sectionSelect = document.getElementById('register-section');
+const classHelp = document.getElementById('class-help');
+const escapeOption = value => String(value).replace(/[&<>"']/g, character => ({
+  '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'
+})[character]);
+
+async function loadRegisterClasses() {
+  try {
+    const response = await fetch('/api/classes');
+    if (!response.ok) throw new Error('The school class directory could not be loaded.');
+    const data = await response.json();
+    registerClasses = data.grades || [];
+    gradeSelect.innerHTML = registerClasses.length
+      ? `<option value="">Choose a grade level</option>${registerClasses.map(grade => `<option value="${grade.id}">${escapeOption(grade.name)}</option>`).join('')}`
+      : '<option value="">No grade levels available</option>';
+    gradeSelect.required = registerClasses.length > 0;
+    gradeSelect.disabled = registerClasses.length === 0;
+    classHelp.textContent = registerClasses.length
+      ? 'Your selection will be reviewed by a school administrator.'
+      : 'The school class directory is not configured yet. You will be asked to complete your class profile after an administrator sets it up.';
+  } catch {
+    gradeSelect.innerHTML = '<option value="">Class directory unavailable</option>';
+    gradeSelect.disabled = true;
+    classHelp.textContent = 'The class list could not be loaded. You may complete your class profile after an administrator sets it up.';
+  }
+}
+
+gradeSelect.addEventListener('change', () => {
+  const grade = registerClasses.find(item => String(item.id) === gradeSelect.value);
+  const sections = grade?.sections || [];
+  sectionSelect.innerHTML = sections.length
+    ? `<option value="">Choose a section</option>${sections.map(section => `<option value="${section.id}">${escapeOption(section.name)}</option>`).join('')}`
+    : '<option value="">No sections configured</option>';
+  sectionSelect.disabled = sections.length === 0;
+  sectionSelect.required = registerClasses.length > 0;
+});
+
 document.querySelectorAll('.password-toggle').forEach((toggle) => {
   toggle.addEventListener('click', () => {
     const input = document.getElementById(toggle.dataset.target);
@@ -161,7 +209,9 @@ document.getElementById('register-form').addEventListener('submit', async (event
         username: document.getElementById('reguser').value,
         email: document.getElementById('email').value,
         password: document.getElementById('password').value,
-        confirmPassword: document.getElementById('confirmPassword').value
+        confirmPassword: document.getElementById('confirmPassword').value,
+        gradeLevelId: gradeSelect.value ? Number(gradeSelect.value) : null,
+        sectionId: sectionSelect.value ? Number(sectionSelect.value) : null
       })
     });
     const data = await response.json();
@@ -174,6 +224,7 @@ document.getElementById('register-form').addEventListener('submit', async (event
   }
   finally { button.disabled = false; }
 });
+loadRegisterClasses();
 </script>
 </body>
 </html>

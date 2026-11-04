@@ -97,6 +97,8 @@ using (var scope = app.Services.CreateScope())
     var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
     await db.Database.EnsureCreatedAsync();
     await EnsureAuthColumnsAsync(db);
+    await EnsureReportSchemaAsync(db);
+    await EnsureSchoolSchemaAsync(db);
 }
 
 app.UseHttpsRedirection();
@@ -133,13 +135,31 @@ app.MapPost("/api/register", async (
     if (password != request.ConfirmPassword)
         return Results.BadRequest(new { message = "Passwords do not match." });
 
+    var hasClassChoice = request.GradeLevelId is not null || request.SectionId is not null;
+    var hasClassDirectory = await db.SchoolGrades.AnyAsync();
+    if (hasClassChoice &&
+        (request.GradeLevelId is null ||
+         request.SectionId is null ||
+         !await db.SchoolSections.AnyAsync(section =>
+             section.Id == request.SectionId && section.GradeLevelId == request.GradeLevelId)))
+        return Results.BadRequest(new { message = "Choose a valid grade level and section from the school directory." });
+    if (hasClassDirectory && !hasClassChoice)
+        return Results.BadRequest(new { message = "Select your grade level and section to create your account." });
+
     if (await db.Users.AnyAsync(u => u.Username == username))
         return Results.Conflict(new { message = "That name is already registered. Try a different name." });
 
     if (await db.Users.AnyAsync(u => u.Email == email))
         return Results.Conflict(new { message = "An account with that email already exists." });
 
-    var user = new AppUser { Username = username, Email = email };
+    var user = new AppUser
+    {
+        Username = username,
+        Email = email,
+        GradeLevelId = request.GradeLevelId,
+        SectionId = request.SectionId,
+        ClassVerificationStatus = hasClassChoice ? "Pending Verification" : "Unassigned"
+    };
     user.PasswordHash = hasher.HashPassword(user, password);
     db.Users.Add(user);
 
@@ -372,18 +392,774 @@ app.MapPost("/api/reset-password", async (
     return Results.Ok(new { message = "Password updated successfully. You can now sign in." });
 }).RequireRateLimiting("auth");
 
-app.MapGet("/api/me", (HttpContext context) =>
+app.MapGet("/api/me", async (HttpContext context, AppDbContext db) =>
     Results.Ok(new
     {
         username = context.User.Identity?.Name,
         email = context.User.FindFirstValue(ClaimTypes.Email),
-        role = context.User.FindFirstValue(ClaimTypes.Role) ?? "user"
+        role = context.User.FindFirstValue(ClaimTypes.Role) ?? "user",
+        profile = await db.Users.AsNoTracking()
+            .Where(user => user.Id == int.Parse(context.User.FindFirstValue(ClaimTypes.NameIdentifier)!))
+            .Select(user => new
+            {
+                user.GradeLevelId,
+                user.SectionId,
+                user.ClassVerificationStatus
+            }).SingleAsync()
     })).RequireAuthorization();
 
 app.MapPost("/api/logout", async (HttpContext context) =>
 {
     await context.SignOutAsync(CookieAuthenticationDefaults.AuthenticationScheme);
     return Results.Ok(new { message = "Logged out." });
+}).RequireAuthorization();
+
+app.MapGet("/api/classes", async (AppDbContext db) =>
+{
+    var grades = await GetClassDirectoryAsync(db);
+    return Results.Ok(new { grades });
+});
+
+app.MapGet("/api/profile", async (HttpContext context, AppDbContext db) =>
+{
+    var userId = int.Parse(context.User.FindFirstValue(ClaimTypes.NameIdentifier)!);
+    var user = await db.Users.AsNoTracking().SingleAsync(item => item.Id == userId);
+    var profile = new
+    {
+        user.Id,
+        user.Username,
+        user.Email,
+        user.GradeLevelId,
+        user.SectionId,
+        user.ClassVerificationStatus,
+        GradeLevel = user.GradeLevelId == null
+            ? null
+            : await db.SchoolGrades.Where(grade => grade.Id == user.GradeLevelId)
+                .Select(grade => grade.Name).SingleOrDefaultAsync(),
+        Section = user.SectionId == null
+            ? null
+            : await db.SchoolSections.Where(section => section.Id == user.SectionId)
+                .Select(section => section.Name).SingleOrDefaultAsync()
+    };
+    return Results.Ok(new { profile, grades = await GetClassDirectoryAsync(db) });
+}).RequireAuthorization();
+
+app.MapPatch("/api/profile/class", async (
+    UpdateClassRequest request,
+    HttpContext context,
+    AppDbContext db) =>
+{
+    if (context.User.IsInRole("admin"))
+        return Results.Forbid();
+    if (request.GradeLevelId is not int gradeLevelId ||
+        request.SectionId is not int sectionId ||
+        !await db.SchoolSections.AnyAsync(section =>
+            section.Id == sectionId && section.GradeLevelId == gradeLevelId))
+        return Results.BadRequest(new { message = "Choose a valid grade level and section from the school directory." });
+
+    var userId = int.Parse(context.User.FindFirstValue(ClaimTypes.NameIdentifier)!);
+    var user = await db.Users.SingleAsync(item => item.Id == userId);
+    if (user.ClassVerificationStatus == "Verified")
+        return Results.Conflict(new { message = "Your class is verified. Contact an administrator to request a change." });
+
+    user.GradeLevelId = gradeLevelId;
+    user.SectionId = sectionId;
+    user.ClassVerificationStatus = "Pending Verification";
+    await db.SaveChangesAsync();
+    return Results.Ok(new { message = "Your class details were submitted for administrator verification." });
+}).RequireAuthorization();
+
+app.MapPost("/api/admin/grade-levels", async (
+    ClassNameRequest request,
+    AppDbContext db) =>
+{
+    var name = request.Name?.Trim();
+    if (string.IsNullOrWhiteSpace(name) || name.Length > 40)
+        return Results.BadRequest(new { message = "Enter a grade-level name with 1–40 characters." });
+    if (await db.SchoolGrades.AnyAsync(grade => grade.Name.ToLower() == name.ToLower()))
+        return Results.Conflict(new { message = "That grade level is already in the directory." });
+
+    var gradeLevel = new SchoolGrade
+    {
+        Name = name,
+        SortOrder = (await db.SchoolGrades.MaxAsync(grade => (int?)grade.SortOrder) ?? 0) + 1
+    };
+    db.SchoolGrades.Add(gradeLevel);
+    await db.SaveChangesAsync();
+    return Results.Created($"/api/admin/grade-levels/{gradeLevel.Id}", new { gradeLevel.Id, gradeLevel.Name });
+}).RequireAuthorization(policy => policy.RequireRole("admin"));
+
+app.MapPatch("/api/admin/grade-levels/{gradeLevelId:int}", async (
+    int gradeLevelId,
+    ClassNameRequest request,
+    AppDbContext db) =>
+{
+    var name = request.Name?.Trim();
+    if (string.IsNullOrWhiteSpace(name) || name.Length > 40)
+        return Results.BadRequest(new { message = "Enter a grade-level name with 1–40 characters." });
+    var gradeLevel = await db.SchoolGrades.SingleOrDefaultAsync(grade => grade.Id == gradeLevelId);
+    if (gradeLevel is null)
+        return Results.NotFound(new { message = "Grade level not found." });
+    if (await db.SchoolGrades.AnyAsync(grade =>
+        grade.Id != gradeLevelId && grade.Name.ToLower() == name.ToLower()))
+        return Results.Conflict(new { message = "That grade level is already in the directory." });
+    gradeLevel.Name = name;
+    await db.SaveChangesAsync();
+    return Results.Ok(new { gradeLevel.Id, gradeLevel.Name });
+}).RequireAuthorization(policy => policy.RequireRole("admin"));
+
+app.MapPost("/api/admin/grade-levels/{gradeLevelId:int}/sections", async (
+    int gradeLevelId,
+    ClassNameRequest request,
+    AppDbContext db) =>
+{
+    var name = request.Name?.Trim();
+    if (string.IsNullOrWhiteSpace(name) || name.Length > 80)
+        return Results.BadRequest(new { message = "Enter a section name with 1–80 characters." });
+    var gradeLevel = await db.SchoolGrades.SingleOrDefaultAsync(grade => grade.Id == gradeLevelId);
+    if (gradeLevel is null)
+        return Results.NotFound(new { message = "Grade level not found." });
+    if (await db.SchoolSections.AnyAsync(section =>
+        section.GradeLevelId == gradeLevelId && section.Name.ToLower() == name.ToLower()))
+        return Results.Conflict(new { message = "That section already exists in this grade level." });
+
+    var section = new SchoolSection
+    {
+        GradeLevelId = gradeLevelId,
+        Name = name,
+        SortOrder = (await db.SchoolSections
+            .Where(item => item.GradeLevelId == gradeLevelId)
+            .MaxAsync(item => (int?)item.SortOrder) ?? 0) + 1
+    };
+    db.SchoolSections.Add(section);
+    await db.SaveChangesAsync();
+    return Results.Created($"/api/admin/sections/{section.Id}", new { section.Id, section.Name, section.GradeLevelId });
+}).RequireAuthorization(policy => policy.RequireRole("admin"));
+
+app.MapPatch("/api/admin/sections/{sectionId:int}", async (
+    int sectionId,
+    ClassNameRequest request,
+    AppDbContext db) =>
+{
+    var name = request.Name?.Trim();
+    if (string.IsNullOrWhiteSpace(name) || name.Length > 80)
+        return Results.BadRequest(new { message = "Enter a section name with 1–80 characters." });
+    var section = await db.SchoolSections.SingleOrDefaultAsync(item => item.Id == sectionId);
+    if (section is null)
+        return Results.NotFound(new { message = "Section not found." });
+    if (await db.SchoolSections.AnyAsync(item =>
+        item.Id != sectionId &&
+        item.GradeLevelId == section.GradeLevelId &&
+        item.Name.ToLower() == name.ToLower()))
+        return Results.Conflict(new { message = "That section already exists in this grade level." });
+    section.Name = name;
+    await db.SaveChangesAsync();
+    return Results.Ok(new { section.Id, section.Name, section.GradeLevelId });
+}).RequireAuthorization(policy => policy.RequireRole("admin"));
+
+app.MapGet("/api/admin/class-verifications", async (AppDbContext db) =>
+{
+    var students = await db.Users.AsNoTracking()
+        .Where(user => user.Role != "admin" && user.ClassVerificationStatus != "Verified")
+        .OrderBy(user => user.Username)
+        .Select(user => new
+        {
+            user.Id,
+            user.Username,
+            user.Email,
+            user.ClassVerificationStatus,
+            user.GradeLevelId,
+            user.SectionId,
+            GradeLevel = db.SchoolGrades.Where(grade => grade.Id == user.GradeLevelId)
+                .Select(grade => grade.Name).FirstOrDefault(),
+            Section = db.SchoolSections.Where(section => section.Id == user.SectionId)
+                .Select(section => section.Name).FirstOrDefault(),
+            ReportCount = db.Reports.Count(report => report.UserId == user.Id)
+        }).ToListAsync();
+    return Results.Ok(students);
+}).RequireAuthorization(policy => policy.RequireRole("admin"));
+
+app.MapGet("/api/admin/students", async (
+    string? search,
+    AppDbContext db) =>
+{
+    var query = db.Users.AsNoTracking()
+        .Where(user => user.Role != "admin" && user.ClassVerificationStatus == "Verified");
+    if (!string.IsNullOrWhiteSpace(search))
+    {
+        var term = search.Trim();
+        query = query.Where(user =>
+            user.Username.Contains(term) || (user.Email != null && user.Email.Contains(term)));
+    }
+    var students = await query.OrderBy(user => user.Username)
+        .Select(user => new
+        {
+            user.Id,
+            user.Username,
+            user.Email,
+            user.GradeLevelId,
+            user.SectionId,
+            GradeLevel = db.SchoolGrades.Where(grade => grade.Id == user.GradeLevelId)
+                .Select(grade => grade.Name).FirstOrDefault(),
+            Section = db.SchoolSections.Where(section => section.Id == user.SectionId)
+                .Select(section => section.Name).FirstOrDefault(),
+            ReportCount = db.Reports.Count(report => report.UserId == user.Id)
+        }).ToListAsync();
+    return Results.Ok(students);
+}).RequireAuthorization(policy => policy.RequireRole("admin"));
+
+app.MapPatch("/api/admin/users/{userId:int}/class", async (
+    int userId,
+    UpdateClassRequest request,
+    AppDbContext db) =>
+{
+    if (request.GradeLevelId is not int gradeLevelId ||
+        request.SectionId is not int sectionId ||
+        !await db.SchoolSections.AnyAsync(section =>
+            section.Id == sectionId && section.GradeLevelId == gradeLevelId))
+        return Results.BadRequest(new { message = "Choose a valid grade level and section from the school directory." });
+
+    var user = await db.Users.SingleOrDefaultAsync(item => item.Id == userId && item.Role != "admin");
+    if (user is null)
+        return Results.NotFound(new { message = "Student account not found." });
+    user.GradeLevelId = gradeLevelId;
+    user.SectionId = sectionId;
+    user.ClassVerificationStatus = "Verified";
+    await db.SaveChangesAsync();
+    return Results.Ok(new { message = "Student class assignment was verified.", user.Id });
+}).RequireAuthorization(policy => policy.RequireRole("admin"));
+
+app.MapGet("/api/admin/overview", async (AppDbContext db) =>
+{
+    var statusCounts = await db.Reports.AsNoTracking()
+        .GroupBy(report => report.Status)
+        .Select(group => new { Status = group.Key, Count = group.Count() })
+        .ToDictionaryAsync(item => item.Status, item => item.Count);
+    var reportsByGrade = await db.Reports.AsNoTracking()
+        .Join(db.Users.AsNoTracking(), report => report.UserId, user => user.Id,
+            (report, user) => new { report, user })
+        .Where(item => item.user.ClassVerificationStatus == "Verified" && item.user.GradeLevelId != null)
+        .Join(db.SchoolGrades.AsNoTracking(), item => item.user.GradeLevelId, grade => grade.Id,
+            (item, grade) => new { grade.Name, item.report.Id })
+        .GroupBy(item => item.Name)
+        .Select(group => new { GradeLevel = group.Key, ReportCount = group.Count() })
+        .OrderBy(item => item.GradeLevel)
+        .ToListAsync();
+    var recentActivity = await db.ReportActivities.AsNoTracking()
+        .OrderByDescending(activity => activity.CreatedAt)
+        .Take(6)
+        .Select(activity => new
+        {
+            activity.ReportId,
+            activity.Action,
+            activity.Details,
+            activity.CreatedAt,
+            Actor = db.Users.Where(user => user.Id == activity.ActorUserId)
+                .Select(user => user.Username).FirstOrDefault(),
+            ReportTitle = db.Reports.Where(report => report.Id == activity.ReportId)
+                .Select(report => report.Title).FirstOrDefault()
+        }).ToListAsync();
+    return Results.Ok(new
+    {
+        Total = statusCounts.Values.Sum(),
+        Pending = statusCounts.GetValueOrDefault("Pending"),
+        Acknowledged = statusCounts.GetValueOrDefault("Acknowledged"),
+        InProgress = statusCounts.GetValueOrDefault("In Progress"),
+        Resolved = statusCounts.GetValueOrDefault("Resolved"),
+        Rejected = statusCounts.GetValueOrDefault("Rejected"),
+        UnverifiedStudents = await db.Users.CountAsync(user =>
+            user.Role != "admin" && user.ClassVerificationStatus != "Verified"),
+        ReportsByGrade = reportsByGrade,
+        RecentActivity = recentActivity
+    });
+}).RequireAuthorization(policy => policy.RequireRole("admin"));
+
+app.MapGet("/api/admin/report-folders/grades", async (AppDbContext db) =>
+{
+    var grades = await db.SchoolGrades.AsNoTracking()
+        .OrderBy(grade => grade.SortOrder).ThenBy(grade => grade.Name)
+        .Select(grade => new
+        {
+            grade.Id,
+            grade.Name,
+            ReportCount = db.Reports.Count(report => db.Users.Any(user =>
+                user.Id == report.UserId &&
+                user.GradeLevelId == grade.Id &&
+                user.ClassVerificationStatus == "Verified")),
+            SectionCount = db.SchoolSections.Count(section => section.GradeLevelId == grade.Id)
+        }).ToListAsync();
+    return Results.Ok(grades);
+}).RequireAuthorization(policy => policy.RequireRole("admin"));
+
+app.MapGet("/api/admin/report-folders/grades/{gradeLevelId:int}/sections", async (
+    int gradeLevelId,
+    AppDbContext db) =>
+{
+    var gradeLevel = await db.SchoolGrades.AsNoTracking()
+        .SingleOrDefaultAsync(grade => grade.Id == gradeLevelId);
+    if (gradeLevel is null)
+        return Results.NotFound(new { message = "Grade level not found." });
+
+    var sections = await db.SchoolSections.AsNoTracking()
+        .Where(section => section.GradeLevelId == gradeLevelId)
+        .OrderBy(section => section.SortOrder).ThenBy(section => section.Name)
+        .Select(section => new
+        {
+            section.Id,
+            section.Name,
+            ReportCount = db.Reports.Count(report => db.Users.Any(user =>
+                user.Id == report.UserId &&
+                user.SectionId == section.Id &&
+                user.ClassVerificationStatus == "Verified"))
+        }).ToListAsync();
+    return Results.Ok(new { gradeLevel = gradeLevel.Name, sections });
+}).RequireAuthorization(policy => policy.RequireRole("admin"));
+
+app.MapGet("/api/admin/report-folders/sections/{sectionId:int}/reports", async (
+    int sectionId,
+    string? search,
+    string? status,
+    string? category,
+    string? sort,
+    AppDbContext db) =>
+{
+    var section = await db.SchoolSections.AsNoTracking()
+        .Join(db.SchoolGrades.AsNoTracking(), item => item.GradeLevelId, grade => grade.Id,
+            (item, grade) => new { Section = item, Grade = grade })
+        .SingleOrDefaultAsync(item => item.Section.Id == sectionId);
+    if (section is null)
+        return Results.NotFound(new { message = "Section not found." });
+
+    var query = db.Reports.AsNoTracking()
+        .Join(db.Users.AsNoTracking(), report => report.UserId, user => user.Id,
+            (report, user) => new { Report = report, User = user })
+        .Where(item => item.User.SectionId == sectionId &&
+                       item.User.ClassVerificationStatus == "Verified");
+    if (!string.IsNullOrWhiteSpace(status))
+        query = query.Where(item => item.Report.Status == status);
+    if (!string.IsNullOrWhiteSpace(category))
+        query = query.Where(item => item.Report.Category == category);
+    if (!string.IsNullOrWhiteSpace(search))
+    {
+        var term = search.Trim();
+        query = query.Where(item =>
+            item.Report.Title.Contains(term) ||
+            item.Report.Location.Contains(term) ||
+            item.Report.Category.Contains(term) ||
+            item.Report.Description.Contains(term) ||
+            item.User.Username.Contains(term));
+    }
+
+    query = sort switch
+    {
+        "oldest" => query.OrderBy(item => item.Report.CreatedAt),
+        "status" => query.OrderBy(item => item.Report.Status).ThenByDescending(item => item.Report.CreatedAt),
+        "priority" => query.OrderBy(item => item.Report.Priority == "High" ? 0 : item.Report.Priority == "Normal" ? 1 : 2)
+            .ThenByDescending(item => item.Report.CreatedAt),
+        _ => query.OrderByDescending(item => item.Report.CreatedAt)
+    };
+    var reports = await query.Select(item => new
+    {
+        item.Report.Id,
+        item.Report.Title,
+        item.Report.Description,
+        item.Report.Category,
+        item.Report.Location,
+        item.Report.Status,
+        item.Report.Priority,
+        item.Report.Assignee,
+        item.Report.CreatedAt,
+        item.Report.UpdatedAt,
+        Reporter = item.User.Username,
+        HasPhoto = item.Report.Photo != null
+    }).ToListAsync();
+    return Results.Ok(new
+    {
+        gradeLevel = section.Grade.Name,
+        section = section.Section.Name,
+        reports
+    });
+}).RequireAuthorization(policy => policy.RequireRole("admin"));
+
+app.MapGet("/api/admin/report-folders/unassigned", async (AppDbContext db) =>
+{
+    var reports = await db.Reports.AsNoTracking()
+        .Join(db.Users.AsNoTracking(), report => report.UserId, user => user.Id,
+            (report, user) => new { Report = report, User = user })
+        .Where(item => item.User.ClassVerificationStatus != "Verified")
+        .OrderByDescending(item => item.Report.CreatedAt)
+        .Select(item => new
+        {
+            item.Report.Id,
+            item.Report.Title,
+            item.Report.Category,
+            item.Report.Location,
+            item.Report.Status,
+            item.Report.Priority,
+            item.Report.CreatedAt,
+            Reporter = item.User.Username,
+            item.User.ClassVerificationStatus,
+            GradeLevel = db.SchoolGrades.Where(grade => grade.Id == item.User.GradeLevelId)
+                .Select(grade => grade.Name).FirstOrDefault(),
+            Section = db.SchoolSections.Where(section => section.Id == item.User.SectionId)
+                .Select(section => section.Name).FirstOrDefault()
+        }).ToListAsync();
+    return Results.Ok(reports);
+}).RequireAuthorization(policy => policy.RequireRole("admin"));
+
+app.MapGet("/api/reports", async (HttpContext context, AppDbContext db) =>
+{
+    var isAdmin = context.User.IsInRole("admin");
+    var userId = int.Parse(context.User.FindFirstValue(ClaimTypes.NameIdentifier)!);
+    var query = db.Reports.AsNoTracking();
+    if (!isAdmin)
+        query = query.Where(report => report.UserId == userId);
+
+    var reports = await query.OrderByDescending(report => report.CreatedAt)
+        .Select(report => new
+        {
+            report.Id,
+            report.UserId,
+            report.Title,
+            report.Description,
+            report.Category,
+            report.Location,
+            report.Status,
+            report.Priority,
+            report.Assignee,
+            report.PublicUpdate,
+            AdminNotes = isAdmin ? report.AdminNotes : null,
+            report.CreatedAt,
+            report.UpdatedAt,
+            Reporter = db.Users.Where(user => user.Id == report.UserId)
+                .Select(user => user.Username).FirstOrDefault(),
+            GradeLevel = db.Users.Where(user => user.Id == report.UserId)
+                .Join(db.SchoolGrades, user => user.GradeLevelId, grade => grade.Id,
+                    (user, grade) => grade.Name).FirstOrDefault(),
+            Section = db.Users.Where(user => user.Id == report.UserId)
+                .Join(db.SchoolSections, user => user.SectionId, section => section.Id,
+                    (user, section) => section.Name).FirstOrDefault(),
+            HasPhoto = report.Photo != null
+        }).ToListAsync();
+    return Results.Ok(reports);
+}).RequireAuthorization();
+
+app.MapGet("/api/reports/{id:int}", async (int id, HttpContext context, AppDbContext db) =>
+{
+    var userId = int.Parse(context.User.FindFirstValue(ClaimTypes.NameIdentifier)!);
+    var report = await db.Reports.AsNoTracking().SingleOrDefaultAsync(item => item.Id == id);
+    if (report is null)
+        return Results.NotFound(new { message = "Report not found." });
+    if (!context.User.IsInRole("admin") && report.UserId != userId)
+        return Results.NotFound(new { message = "Report not found." });
+
+    var reporter = await db.Users.Where(user => user.Id == report.UserId)
+        .Select(user => user.Username).SingleOrDefaultAsync();
+    var reporterClass = await db.Users.AsNoTracking()
+        .Where(user => user.Id == report.UserId)
+        .Select(user => new
+        {
+            user.ClassVerificationStatus,
+            GradeLevel = db.SchoolGrades.Where(grade => grade.Id == user.GradeLevelId)
+                .Select(grade => grade.Name).FirstOrDefault(),
+            Section = db.SchoolSections.Where(section => section.Id == user.SectionId)
+                .Select(section => section.Name).FirstOrDefault()
+        }).SingleOrDefaultAsync();
+    var isAdmin = context.User.IsInRole("admin");
+    var history = await db.ReportActivities.AsNoTracking()
+        .Where(activity => activity.ReportId == report.Id)
+        .Where(activity => context.User.IsInRole("admin") || activity.Action != "Admin note added")
+        .OrderBy(activity => activity.CreatedAt)
+        .Select(activity => new
+        {
+            activity.Action,
+            activity.Details,
+            activity.CreatedAt,
+            Actor = db.Users.Where(user => user.Id == activity.ActorUserId)
+                .Select(user => user.Username).FirstOrDefault()
+        }).ToListAsync();
+    return Results.Ok(new
+    {
+        report.Id,
+        report.Title,
+        report.Description,
+        report.Category,
+        report.Location,
+        report.Status,
+        report.Priority,
+        report.Assignee,
+        report.PublicUpdate,
+        report.CreatedAt,
+        report.UpdatedAt,
+        Reporter = isAdmin ? reporter : null,
+        GradeLevel = isAdmin ? reporterClass?.GradeLevel : null,
+        Section = isAdmin ? reporterClass?.Section : null,
+        ClassVerificationStatus = isAdmin ? reporterClass?.ClassVerificationStatus : null,
+        AdminNotes = isAdmin ? report.AdminNotes : null,
+        Photo = report.Photo is null ? null : $"data:{report.PhotoContentType ?? "image/jpeg"};base64,{Convert.ToBase64String(report.Photo)}",
+        History = history
+    });
+}).RequireAuthorization();
+
+app.MapPost("/api/reports", async (
+    CreateReportRequest request,
+    HttpContext context,
+    AppDbContext db) =>
+{
+    var title = request.Title?.Trim();
+    var description = request.Description?.Trim();
+    var category = request.Category?.Trim();
+    var location = request.Location?.Trim();
+    var supportedCategories = new[] { "General", "Electrical", "Plumbing", "Cleaning", "Furniture", "Safety", "Other" };
+    if (string.IsNullOrWhiteSpace(title) || title.Length > 100 ||
+        string.IsNullOrWhiteSpace(description) || description.Length > 1000 ||
+        string.IsNullOrWhiteSpace(category) || !supportedCategories.Contains(category, StringComparer.Ordinal) ||
+        string.IsNullOrWhiteSpace(location) || location.Length > 160)
+        return Results.BadRequest(new { message = "Enter a valid title, category, location, and description." });
+
+    byte[]? photo = null;
+    string? contentType = null;
+    if (!string.IsNullOrWhiteSpace(request.Image))
+    {
+        var separator = request.Image.IndexOf(',');
+        var metadata = separator >= 0 ? request.Image[..separator] : "";
+        if (!metadata.StartsWith("data:image/", StringComparison.OrdinalIgnoreCase) ||
+            !(metadata.Contains("image/jpeg", StringComparison.OrdinalIgnoreCase) ||
+              metadata.Contains("image/png", StringComparison.OrdinalIgnoreCase) ||
+              metadata.Contains("image/gif", StringComparison.OrdinalIgnoreCase) ||
+              metadata.Contains("image/webp", StringComparison.OrdinalIgnoreCase)) ||
+            separator < 0 ||
+            !Convert.TryFromBase64String(request.Image[(separator + 1)..], new byte[1_048_577], out _))
+            return Results.BadRequest(new { message = "Choose a valid JPEG, PNG, GIF, or WebP image smaller than 1 MB." });
+
+        try { photo = Convert.FromBase64String(request.Image[(separator + 1)..]); }
+        catch (FormatException) { return Results.BadRequest(new { message = "The uploaded image is invalid." }); }
+        if (photo.Length > 1_048_576)
+            return Results.BadRequest(new { message = "Choose an image smaller than 1 MB." });
+        contentType = metadata["data:".Length..].Split(';')[0];
+    }
+
+    var userId = int.Parse(context.User.FindFirstValue(ClaimTypes.NameIdentifier)!);
+    var userHasClass = await db.Users.AnyAsync(user =>
+        user.Id == userId && user.GradeLevelId != null && user.SectionId != null);
+    if (!userHasClass)
+        return Results.BadRequest(new { message = "Complete your grade-level and section information before submitting a report." });
+
+    var report = new MaintenanceReport
+    {
+        UserId = userId,
+        Title = title,
+        Description = description,
+        Category = category,
+        Location = location,
+        Status = "Pending",
+        Priority = "Normal",
+        Photo = photo,
+        PhotoContentType = contentType,
+        CreatedAt = DateTime.UtcNow
+    };
+    await using var transaction = await db.Database.BeginTransactionAsync();
+    db.Reports.Add(report);
+    await db.SaveChangesAsync();
+    db.ReportActivities.Add(new ReportActivity
+    {
+        ReportId = report.Id,
+        ActorUserId = userId,
+        Action = "Submitted",
+        Details = "Report submitted."
+    });
+    var administratorIds = await db.Users.Where(user => user.Role == "admin")
+        .Select(user => user.Id).ToListAsync();
+    db.ReportNotifications.AddRange(administratorIds.Select(adminId => new ReportNotification
+    {
+        RecipientUserId = adminId,
+        ReportId = report.Id,
+        Message = $"New maintenance report: {report.Title}."
+    }));
+    await db.SaveChangesAsync();
+    await transaction.CommitAsync();
+    return Results.Created($"/api/reports/{report.Id}", new { report.Id, message = "Report submitted." });
+}).RequireAuthorization().RequireRateLimiting("auth");
+
+app.MapPatch("/api/reports/{id:int}", async (
+    int id,
+    UpdateReportRequest request,
+    HttpContext context,
+    AppDbContext db) =>
+{
+    var report = await db.Reports.SingleOrDefaultAsync(item => item.Id == id);
+    if (report is null)
+        return Results.NotFound(new { message = "Report not found." });
+
+    var actorId = int.Parse(context.User.FindFirstValue(ClaimTypes.NameIdentifier)!);
+    if (!context.User.IsInRole("admin"))
+        return Results.Forbid();
+
+    var changes = new List<(string Action, string Details)>();
+    var statuses = new[] { "Pending", "Acknowledged", "In Progress", "Resolved", "Rejected" };
+    var priorities = new[] { "Low", "Normal", "High" };
+    if (request.Status is not null)
+    {
+        if (!statuses.Contains(request.Status, StringComparer.Ordinal))
+            return Results.BadRequest(new { message = "Choose a valid report status." });
+        if (request.Status == "Rejected" &&
+            string.IsNullOrWhiteSpace(request.PublicUpdate ?? report.PublicUpdate))
+            return Results.BadRequest(new { message = "Add a brief explanation for the student before rejecting this report." });
+        if (report.Status != request.Status)
+        {
+            changes.Add(("Status changed", $"{report.Status} → {request.Status}"));
+            report.Status = request.Status;
+        }
+    }
+    if (request.Priority is not null)
+    {
+        if (!priorities.Contains(request.Priority, StringComparer.Ordinal))
+            return Results.BadRequest(new { message = "Choose Low, Normal, or High priority." });
+        if (report.Priority != request.Priority)
+        {
+            changes.Add(("Priority changed", $"{report.Priority} → {request.Priority}"));
+            report.Priority = request.Priority;
+        }
+    }
+    if (request.Assignee is not null)
+    {
+        var assignee = request.Assignee.Trim();
+        if (assignee.Length > 60)
+            return Results.BadRequest(new { message = "Assignment must be 60 characters or fewer." });
+        if (report.Assignee != assignee)
+        {
+            changes.Add(("Assignment changed", string.IsNullOrEmpty(assignee) ? "Assignment cleared." : $"Assigned to {assignee}."));
+            report.Assignee = string.IsNullOrEmpty(assignee) ? null : assignee;
+        }
+    }
+    if (request.AdminNotes is not null)
+    {
+        var notes = request.AdminNotes.Trim();
+        if (notes.Length > 1000)
+            return Results.BadRequest(new { message = "Notes must be 1,000 characters or fewer." });
+        if (report.AdminNotes != notes)
+        {
+            changes.Add(("Admin note added", notes));
+            report.AdminNotes = notes;
+        }
+    }
+    if (request.PublicUpdate is not null)
+    {
+        var update = request.PublicUpdate.Trim();
+        if (update.Length > 500)
+            return Results.BadRequest(new { message = "Student updates must be 500 characters or fewer." });
+        if (report.PublicUpdate != update)
+        {
+            report.PublicUpdate = update;
+            changes.Add(("Public update", update));
+        }
+    }
+    report.UpdatedAt = DateTime.UtcNow;
+    foreach (var change in changes)
+        db.ReportActivities.Add(new ReportActivity
+        {
+            ReportId = report.Id,
+            ActorUserId = actorId,
+            Action = change.Action,
+            Details = change.Details
+        });
+    if (changes.Any(change => change.Action is "Status changed" or "Public update"))
+        db.ReportNotifications.Add(new ReportNotification
+        {
+            RecipientUserId = report.UserId,
+            ReportId = report.Id,
+            Message = string.IsNullOrWhiteSpace(report.PublicUpdate)
+                ? $"Your report “{report.Title}” is now {report.Status}."
+                : $"Your report “{report.Title}” is now {report.Status}: {report.PublicUpdate}"
+        });
+    await db.SaveChangesAsync();
+    return Results.Ok(new { message = "Report updated." });
+}).RequireAuthorization(policy => policy.RequireRole("admin"));
+
+app.MapDelete("/api/reports/{id:int}", async (int id, AppDbContext db) =>
+{
+    var report = await db.Reports.SingleOrDefaultAsync(item => item.Id == id);
+    if (report is null)
+        return Results.NotFound(new { message = "Report not found." });
+    db.ReportActivities.RemoveRange(db.ReportActivities.Where(item => item.ReportId == id));
+    db.ReportNotifications.RemoveRange(db.ReportNotifications.Where(item => item.ReportId == id));
+    db.Reports.Remove(report);
+    await db.SaveChangesAsync();
+    return Results.Ok(new { message = "Report deleted." });
+}).RequireAuthorization(policy => policy.RequireRole("admin"));
+
+app.MapGet("/api/notifications", async (HttpContext context, AppDbContext db) =>
+{
+    var userId = int.Parse(context.User.FindFirstValue(ClaimTypes.NameIdentifier)!);
+    var query = db.ReportNotifications.AsNoTracking()
+        .Where(notification => notification.RecipientUserId == userId);
+    var notifications = await query.OrderByDescending(notification => notification.CreatedAt)
+        .Take(50)
+        .Select(notification => new
+        {
+            notification.Id,
+            notification.ReportId,
+            notification.Message,
+            notification.CreatedAt,
+            notification.ReadAt
+        }).ToListAsync();
+    return Results.Ok(notifications);
+}).RequireAuthorization();
+
+app.MapGet("/api/activity", async (AppDbContext db) =>
+{
+    var activity = await db.ReportActivities.AsNoTracking()
+        .OrderByDescending(item => item.CreatedAt)
+        .Take(100)
+        .Select(item => new
+        {
+            item.ReportId,
+            item.Action,
+            item.Details,
+            item.CreatedAt,
+            Actor = db.Users.Where(user => user.Id == item.ActorUserId)
+                .Select(user => user.Username).FirstOrDefault(),
+            ReportTitle = db.Reports.Where(report => report.Id == item.ReportId)
+                .Select(report => report.Title).FirstOrDefault()
+        }).ToListAsync();
+    return Results.Ok(activity);
+}).RequireAuthorization(policy => policy.RequireRole("admin"));
+
+app.MapPost("/api/notifications/{id:int}/read", async (int id, HttpContext context, AppDbContext db) =>
+{
+    var userId = int.Parse(context.User.FindFirstValue(ClaimTypes.NameIdentifier)!);
+    var notification = await db.ReportNotifications.SingleOrDefaultAsync(item =>
+        item.Id == id && item.RecipientUserId == userId);
+    if (notification is null)
+        return Results.NotFound(new { message = "Notification not found." });
+    notification.ReadAt ??= DateTime.UtcNow;
+    await db.SaveChangesAsync();
+    return Results.Ok(new { message = "Notification marked as read." });
+}).RequireAuthorization();
+
+app.MapPost("/api/profile", async (
+    UpdateProfileRequest request,
+    HttpContext context,
+    AppDbContext db) =>
+{
+    var name = request.Username?.Trim();
+    if (string.IsNullOrWhiteSpace(name) || name.Length < 3 || name.Length > 50)
+        return Results.BadRequest(new { message = "Name must contain 3–50 characters." });
+    var userId = int.Parse(context.User.FindFirstValue(ClaimTypes.NameIdentifier)!);
+    if (await db.Users.AnyAsync(user => user.Id != userId && user.Username == name))
+        return Results.Conflict(new { message = "That name is already in use." });
+    var user = await db.Users.SingleAsync(user => user.Id == userId);
+    user.Username = name;
+    await db.SaveChangesAsync();
+    var identity = context.User.Identity as ClaimsIdentity;
+    var nameClaim = identity?.FindFirst(ClaimTypes.Name);
+    if (identity is not null && nameClaim is not null)
+    {
+        identity.RemoveClaim(nameClaim);
+        identity.AddClaim(new Claim(ClaimTypes.Name, name));
+        await context.SignInAsync(CookieAuthenticationDefaults.AuthenticationScheme, context.User);
+    }
+    return Results.Ok(new { username = user.Username, message = "Profile updated." });
 }).RequireAuthorization();
 
 app.Run();
@@ -403,6 +1179,175 @@ static bool IsValidEmail(string email)
 
 static byte[] HashVerificationCode(string code, byte[] salt) =>
     Rfc2898DeriveBytes.Pbkdf2(code, salt, 210_000, HashAlgorithmName.SHA256, 32);
+
+static async Task<List<GradeDirectoryResponse>> GetClassDirectoryAsync(AppDbContext db)
+{
+    var grades = await db.SchoolGrades.AsNoTracking()
+        .OrderBy(grade => grade.SortOrder).ThenBy(grade => grade.Name)
+        .Select(grade => new GradeDirectoryResponse(grade.Id, grade.Name, new List<SectionDirectoryResponse>()))
+        .ToListAsync();
+    var sections = await db.SchoolSections.AsNoTracking()
+        .OrderBy(section => section.SortOrder).ThenBy(section => section.Name)
+        .Select(section => new SectionDirectoryResponse(section.Id, section.Name, section.GradeLevelId))
+        .ToListAsync();
+    var gradeById = grades.ToDictionary(grade => grade.Id);
+    foreach (var section in sections)
+        if (gradeById.TryGetValue(section.GradeLevelId, out var grade))
+            grade.Sections.Add(section);
+    return grades;
+}
+
+static async Task EnsureSchoolSchemaAsync(AppDbContext db)
+{
+    var connection = db.Database.GetDbConnection();
+    var openedHere = connection.State != System.Data.ConnectionState.Open;
+    if (openedHere) await connection.OpenAsync();
+    try
+    {
+        await using var command = connection.CreateCommand();
+        command.CommandText = """
+            CREATE TABLE IF NOT EXISTS "SchoolGrades" (
+                "Id" INTEGER NOT NULL CONSTRAINT "PK_SchoolGrades" PRIMARY KEY AUTOINCREMENT,
+                "Name" TEXT NOT NULL COLLATE NOCASE,
+                "SortOrder" INTEGER NOT NULL DEFAULT 0
+            );
+            CREATE TABLE IF NOT EXISTS "SchoolSections" (
+                "Id" INTEGER NOT NULL CONSTRAINT "PK_SchoolSections" PRIMARY KEY AUTOINCREMENT,
+                "GradeLevelId" INTEGER NOT NULL,
+                "Name" TEXT NOT NULL COLLATE NOCASE,
+                "SortOrder" INTEGER NOT NULL DEFAULT 0,
+                CONSTRAINT "FK_SchoolSections_SchoolGrades_GradeLevelId"
+                    FOREIGN KEY ("GradeLevelId") REFERENCES "SchoolGrades" ("Id") ON DELETE RESTRICT
+            );
+            CREATE UNIQUE INDEX IF NOT EXISTS "IX_SchoolGrades_Name" ON "SchoolGrades" ("Name" COLLATE NOCASE);
+            CREATE UNIQUE INDEX IF NOT EXISTS "IX_SchoolSections_GradeLevelId_Name"
+                ON "SchoolSections" ("GradeLevelId", "Name" COLLATE NOCASE);
+            """;
+        await command.ExecuteNonQueryAsync();
+
+        var columns = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        await using (var info = connection.CreateCommand())
+        {
+            info.CommandText = "PRAGMA table_info('Users');";
+            await using var reader = await info.ExecuteReaderAsync();
+            while (await reader.ReadAsync())
+                columns.Add(reader.GetString(1));
+        }
+
+        foreach (var (name, declaration) in new[]
+                 {
+                     ("GradeLevelId", "INTEGER NULL REFERENCES SchoolGrades(Id) ON DELETE RESTRICT"),
+                     ("SectionId", "INTEGER NULL REFERENCES SchoolSections(Id) ON DELETE RESTRICT"),
+                     ("ClassVerificationStatus", "TEXT NOT NULL DEFAULT 'Unassigned'")
+                 })
+        {
+            if (columns.Contains(name)) continue;
+            await using var alter = connection.CreateCommand();
+            alter.CommandText = $"ALTER TABLE \"Users\" ADD COLUMN \"{name}\" {declaration};";
+            await alter.ExecuteNonQueryAsync();
+        }
+        await using var indexes = connection.CreateCommand();
+        indexes.CommandText = """
+            CREATE INDEX IF NOT EXISTS "IX_Users_GradeLevelId" ON "Users" ("GradeLevelId");
+            CREATE INDEX IF NOT EXISTS "IX_Users_SectionId" ON "Users" ("SectionId");
+            """;
+        await indexes.ExecuteNonQueryAsync();
+    }
+    finally
+    {
+        if (openedHere) await connection.CloseAsync();
+    }
+}
+
+static async Task EnsureReportSchemaAsync(AppDbContext db)
+{
+    var connection = db.Database.GetDbConnection();
+    var openedHere = connection.State != System.Data.ConnectionState.Open;
+    if (openedHere) await connection.OpenAsync();
+    try
+    {
+        await using var command = connection.CreateCommand();
+        command.CommandText = """
+            CREATE TABLE IF NOT EXISTS "Reports" (
+                "Id" INTEGER NOT NULL CONSTRAINT "PK_Reports" PRIMARY KEY AUTOINCREMENT,
+                "UserId" INTEGER NOT NULL,
+                "Title" TEXT NOT NULL,
+                "Description" TEXT NOT NULL,
+                "Category" TEXT NOT NULL,
+                "Location" TEXT NOT NULL,
+                "Photo" BLOB NULL,
+                "PhotoContentType" TEXT NULL,
+                "Status" TEXT NOT NULL DEFAULT 'Pending',
+                "Priority" TEXT NOT NULL DEFAULT 'Normal',
+                "Assignee" TEXT NULL,
+                "AdminNotes" TEXT NULL,
+                "CreatedAt" TEXT NOT NULL,
+                "UpdatedAt" TEXT NULL
+            );
+            CREATE TABLE IF NOT EXISTS "ReportActivities" (
+                "Id" INTEGER NOT NULL CONSTRAINT "PK_ReportActivities" PRIMARY KEY AUTOINCREMENT,
+                "ReportId" INTEGER NOT NULL,
+                "ActorUserId" INTEGER NOT NULL,
+                "Action" TEXT NOT NULL,
+                "Details" TEXT NOT NULL,
+                "CreatedAt" TEXT NOT NULL,
+                FOREIGN KEY ("ReportId") REFERENCES "Reports" ("Id") ON DELETE CASCADE
+            );
+            CREATE TABLE IF NOT EXISTS "ReportNotifications" (
+                "Id" INTEGER NOT NULL CONSTRAINT "PK_ReportNotifications" PRIMARY KEY AUTOINCREMENT,
+                "RecipientUserId" INTEGER NOT NULL,
+                "ReportId" INTEGER NOT NULL,
+                "Message" TEXT NOT NULL,
+                "CreatedAt" TEXT NOT NULL,
+                "ReadAt" TEXT NULL,
+                FOREIGN KEY ("ReportId") REFERENCES "Reports" ("Id") ON DELETE CASCADE
+            );
+            CREATE INDEX IF NOT EXISTS "IX_Reports_UserId_CreatedAt" ON "Reports" ("UserId", "CreatedAt");
+            CREATE INDEX IF NOT EXISTS "IX_ReportActivities_ReportId_CreatedAt" ON "ReportActivities" ("ReportId", "CreatedAt");
+            CREATE INDEX IF NOT EXISTS "IX_ReportNotifications_RecipientUserId_CreatedAt" ON "ReportNotifications" ("RecipientUserId", "CreatedAt");
+            """;
+        await command.ExecuteNonQueryAsync();
+
+        var columns = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        await using (var info = connection.CreateCommand())
+        {
+            info.CommandText = "PRAGMA table_info('Reports');";
+            await using var reader = await info.ExecuteReaderAsync();
+            while (await reader.ReadAsync())
+                columns.Add(reader.GetString(1));
+        }
+
+        foreach (var (name, declaration) in new[]
+                 {
+                     ("PhotoContentType", "TEXT NULL"),
+                     ("PublicUpdate", "TEXT NULL"),
+                     ("Priority", "TEXT NOT NULL DEFAULT 'Normal'"),
+                     ("Assignee", "TEXT NULL")
+                 })
+        {
+            if (columns.Contains(name)) continue;
+            await using var alter = connection.CreateCommand();
+            alter.CommandText = $"ALTER TABLE \"Reports\" ADD COLUMN \"{name}\" {declaration};";
+            await alter.ExecuteNonQueryAsync();
+        }
+        await using var normalize = connection.CreateCommand();
+        normalize.CommandText = """
+            UPDATE "Reports" SET "Status" = CASE "Status"
+                WHEN 'New' THEN 'Pending'
+                WHEN 'Seen' THEN 'Acknowledged'
+                WHEN 'In progress' THEN 'In Progress'
+                WHEN 'Fixed' THEN 'Resolved'
+                WHEN 'Closed' THEN 'Resolved'
+                ELSE "Status" END
+            WHERE "Status" IN ('New', 'Seen', 'In progress', 'Fixed', 'Closed');
+            """;
+        await normalize.ExecuteNonQueryAsync();
+    }
+    finally
+    {
+        if (openedHere) await connection.CloseAsync();
+    }
+}
 
 static async Task EnsureAuthColumnsAsync(AppDbContext db)
 {
@@ -491,11 +1436,18 @@ static async Task SendVerificationCodeEmailAsync(SmtpSettings settings, string t
     await client.SendMailAsync(message);
 }
 
-public record RegisterRequest(string? Username, string? Email, string? Password, string? ConfirmPassword);
+public record RegisterRequest(string? Username, string? Email, string? Password, string? ConfirmPassword, int? GradeLevelId, int? SectionId);
 public record LoginRequest(string? Email, string? Password);
 public record ForgotPasswordRequest(string? Email);
 public record VerifyResetCodeRequest(string? Email, string? Code);
 public record ResetPasswordRequest(string? ResetToken, string? Password, string? ConfirmPassword);
+public record CreateReportRequest(string? Title, string? Description, string? Category, string? Location, string? Image);
+public record UpdateReportRequest(string? Status, string? Priority, string? Assignee, string? AdminNotes, string? PublicUpdate);
+public record UpdateProfileRequest(string? Username);
+public record UpdateClassRequest(int? GradeLevelId, int? SectionId);
+public record ClassNameRequest(string? Name);
+public record GradeDirectoryResponse(int Id, string Name, List<SectionDirectoryResponse> Sections);
+public record SectionDirectoryResponse(int Id, string Name, int GradeLevelId);
 
 public sealed class SmtpSettings
 {
@@ -538,6 +1490,24 @@ public class AppUser
     public string? PasswordResetTokenHash { get; set; }
     public DateTime? PasswordResetTokenExpiresUtc { get; set; }
     public int SessionVersion { get; set; }
+    public int? GradeLevelId { get; set; }
+    public int? SectionId { get; set; }
+    public string ClassVerificationStatus { get; set; } = "Unassigned";
+}
+
+public class SchoolGrade
+{
+    public int Id { get; set; }
+    public string Name { get; set; } = "";
+    public int SortOrder { get; set; }
+}
+
+public class SchoolSection
+{
+    public int Id { get; set; }
+    public int GradeLevelId { get; set; }
+    public string Name { get; set; } = "";
+    public int SortOrder { get; set; }
 }
 
 public class PasswordResetCode
@@ -553,10 +1523,54 @@ public class PasswordResetCode
     public DateTime? UsedUtc { get; set; }
 }
 
+public class MaintenanceReport
+{
+    public int Id { get; set; }
+    public int UserId { get; set; }
+    public string Title { get; set; } = "";
+    public string Description { get; set; } = "";
+    public string Category { get; set; } = "";
+    public string Location { get; set; } = "";
+    public byte[]? Photo { get; set; }
+    public string? PhotoContentType { get; set; }
+    public string Status { get; set; } = "Pending";
+    public string Priority { get; set; } = "Normal";
+    public string? Assignee { get; set; }
+    public string? PublicUpdate { get; set; }
+    public string? AdminNotes { get; set; }
+    public DateTime CreatedAt { get; set; }
+    public DateTime? UpdatedAt { get; set; }
+}
+
+public class ReportActivity
+{
+    public int Id { get; set; }
+    public int ReportId { get; set; }
+    public int ActorUserId { get; set; }
+    public string Action { get; set; } = "";
+    public string Details { get; set; } = "";
+    public DateTime CreatedAt { get; set; } = DateTime.UtcNow;
+}
+
+public class ReportNotification
+{
+    public int Id { get; set; }
+    public int RecipientUserId { get; set; }
+    public int ReportId { get; set; }
+    public string Message { get; set; } = "";
+    public DateTime CreatedAt { get; set; } = DateTime.UtcNow;
+    public DateTime? ReadAt { get; set; }
+}
+
 public class AppDbContext(DbContextOptions<AppDbContext> options) : DbContext(options)
 {
     public DbSet<AppUser> Users => Set<AppUser>();
+    public DbSet<SchoolGrade> SchoolGrades => Set<SchoolGrade>();
+    public DbSet<SchoolSection> SchoolSections => Set<SchoolSection>();
     public DbSet<PasswordResetCode> PasswordResetCodes => Set<PasswordResetCode>();
+    public DbSet<MaintenanceReport> Reports => Set<MaintenanceReport>();
+    public DbSet<ReportActivity> ReportActivities => Set<ReportActivity>();
+    public DbSet<ReportNotification> ReportNotifications => Set<ReportNotification>();
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
@@ -566,7 +1580,26 @@ public class AppDbContext(DbContextOptions<AppDbContext> options) : DbContext(op
             .HasFilter("\"Email\" IS NOT NULL AND \"Email\" <> ''");
         user.HasIndex(x => x.PasswordResetTokenHash).IsUnique()
             .HasFilter("\"PasswordResetTokenHash\" IS NOT NULL");
+        user.HasIndex(x => x.GradeLevelId);
+        user.HasIndex(x => x.SectionId);
 
+        var grade = modelBuilder.Entity<SchoolGrade>();
+        grade.Property(item => item.Name).UseCollation("NOCASE");
+        grade.HasIndex(item => item.Name).IsUnique();
+
+        var section = modelBuilder.Entity<SchoolSection>();
+        section.Property(item => item.Name).UseCollation("NOCASE");
+        section.HasIndex(item => new { item.GradeLevelId, item.Name }).IsUnique();
+        section.HasOne<SchoolGrade>().WithMany().HasForeignKey(item => item.GradeLevelId)
+            .OnDelete(DeleteBehavior.Restrict);
+
+        user.HasOne<SchoolGrade>().WithMany().HasForeignKey(item => item.GradeLevelId)
+            .OnDelete(DeleteBehavior.Restrict);
+        user.HasOne<SchoolSection>().WithMany().HasForeignKey(item => item.SectionId)
+            .OnDelete(DeleteBehavior.Restrict);
         modelBuilder.Entity<PasswordResetCode>().HasKey(x => x.Email);
+        modelBuilder.Entity<MaintenanceReport>().ToTable("Reports");
+        modelBuilder.Entity<ReportActivity>().ToTable("ReportActivities");
+        modelBuilder.Entity<ReportNotification>().ToTable("ReportNotifications");
     }
 }
