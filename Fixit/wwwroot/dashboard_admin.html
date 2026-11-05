@@ -35,8 +35,7 @@
             <p class="nav-caption">WORKSPACE</p>
             <button class="admin-nav-link is-active" type="button" data-view="overview"><span aria-hidden="true">◫</span> Overview</button>
             <button class="admin-nav-link" type="button" data-view="reports"><span aria-hidden="true">▤</span> Report management</button>
-            <button class="admin-nav-link" type="button" data-view="verification"><span aria-hidden="true">◎</span> Student verification <span class="nav-count" id="verification-count" hidden></span></button>
-            <button class="admin-nav-link" type="button" data-view="directory"><span aria-hidden="true">▦</span> Class directory</button>
+            <button class="admin-nav-link" type="button" data-view="classes"><span aria-hidden="true">▦</span> Manage Class Options</button>
             <div class="nav-school-note"><span class="school-monogram small-monogram" aria-hidden="true">LI</span><span>LIFE Institute<br><small>Mariveles</small></span></div>
         </nav>
 
@@ -44,7 +43,6 @@
             <section class="admin-panel" data-panel="overview" aria-labelledby="admin-title">
                 <div class="admin-page-heading">
                     <div><p class="eyebrow">SCHOOL-WIDE SNAPSHOT</p><h1 id="admin-title">Maintenance overview</h1><p class="lede">A clear view of reports that need attention across campus.</p></div>
-                    <button class="button button-outline" type="button" data-view-button="reports">Open report folders <span aria-hidden="true">→</span></button>
                 </div>
                 <div class="admin-metrics" aria-label="Report totals">
                     <div class="metric-item"><span>Total reports</span><strong id="overview-total">—</strong></div>
@@ -54,7 +52,7 @@
                 </div>
                 <div class="overview-grid">
                     <section class="content-section">
-                        <div class="section-title-row"><div><p class="eyebrow">VERIFIED CLASSES</p><h2>Reports by grade level</h2></div></div>
+                        <div class="section-title-row"><div><p class="eyebrow">CLASS FOLDERS</p><h2>Reports by grade level</h2></div></div>
                         <div id="overview-grades" class="overview-grade-list"><p class="loading-state">Loading school totals…</p></div>
                     </section>
                     <section class="content-section">
@@ -67,7 +65,7 @@
 
             <section class="admin-panel" data-panel="reports" aria-labelledby="folders-title" hidden>
                 <div class="admin-page-heading">
-                    <div><p class="eyebrow">GRADE LEVEL → SECTION → REPORTS</p><h1 id="folders-title">Report management</h1><p class="lede">Open a class folder to review its verified students’ submissions.</p></div>
+                    <div><p class="eyebrow">GRADE LEVEL → SECTION → REPORTS</p><h1 id="folders-title">Report management</h1><p class="lede">Open a class folder to review reports submitted by students assigned to that class.</p></div>
                 </div>
                 <nav class="folder-breadcrumbs" id="folder-breadcrumbs" aria-label="Report folder location"></nav>
                 <div class="folder-toolbar" id="folder-toolbar" hidden>
@@ -80,35 +78,41 @@
                 <div id="folder-content" class="folder-content" aria-live="polite"><p class="loading-state">Loading report folders…</p></div>
             </section>
 
-            <section class="admin-panel" data-panel="verification" aria-labelledby="verification-title" hidden>
+            <section class="admin-panel" data-panel="classes" aria-labelledby="class-options-title" hidden>
                 <div class="admin-page-heading">
-                    <div><p class="eyebrow">CLASS PLACEMENT REVIEW</p><h1 id="verification-title">Student verification</h1><p class="lede">Confirm or correct the class information students submitted. Unverified reports stay outside confirmed class folders.</p></div>
+                    <div><p class="eyebrow">SCHOOL CLASS LIST</p><h1 id="class-options-title">Manage Class Options</h1><p class="lede">Import the current grade levels and sections from an Excel workbook. Existing student assignments and reports are kept if an option is removed.</p></div>
                 </div>
-                <div id="verification-list" class="verification-list" aria-live="polite"><p class="loading-state">Loading student submissions…</p></div>
-                <section class="verified-students-section" aria-labelledby="verified-students-title">
-                    <div class="section-title-row"><div><p class="eyebrow">CURRENT CLASS ASSIGNMENTS</p><h2 id="verified-students-title">Find a verified student</h2></div></div>
-                    <label class="filter-search">Search by student name or email<input id="verified-students-search" type="search" placeholder="Search students"></label>
-                    <div id="verified-students-list" class="verification-list" aria-live="polite"><p class="loading-state">Loading verified students…</p></div>
+                <div class="class-import-layout">
+                    <section class="class-import-instructions">
+                        <h2>Workbook format</h2>
+                        <p>Use the first worksheet. The first row must contain <strong>Grade Level</strong> and <strong>Section</strong> headings. Leave fully blank rows out or use them as spacing.</p>
+                        <div class="class-import-example" role="table" aria-label="Example workbook rows">
+                            <div role="row"><strong role="columnheader">Grade Level</strong><strong role="columnheader">Section</strong></div>
+                            <div role="row"><span role="cell">Grade 7</span><span role="cell">Section A</span></div>
+                            <div role="row"><span role="cell">Grade 7</span><span role="cell">Section B</span></div>
+                        </div>
+                        <p class="label-muted">Importing replaces the available dropdown choices. Removed options are archived, not deleted, and students are never reassigned automatically.</p>
+                    </section>
+                    <form id="class-import-form" class="class-import-form">
+                        <label for="class-import-file">Excel workbook (.xlsx)</label>
+                        <input id="class-import-file" name="file" type="file" accept=".xlsx,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" required>
+                        <p class="field-error" id="class-import-error" role="alert"></p>
+                        <button class="button button-primary" id="preview-class-import" type="submit">Preview import</button>
+                    </form>
+                </div>
+                <section id="class-import-preview" class="class-import-preview" aria-live="polite" hidden>
+                    <div class="section-title-row"><div><p class="eyebrow">REVIEW BEFORE APPLYING</p><h2>Import preview</h2></div></div>
+                    <div id="class-import-diff"></div>
+                    <p class="field-error" id="class-import-confirm-error" role="alert"></p>
+                    <div class="dialog-actions">
+                        <button class="button button-primary" id="confirm-class-import" type="button">Apply class options</button>
+                        <button class="button button-quiet" id="cancel-class-import" type="button">Cancel preview</button>
+                    </div>
                 </section>
-            </section>
-
-            <section class="admin-panel" data-panel="directory" aria-labelledby="directory-title" hidden>
-                <div class="admin-page-heading">
-                    <div><p class="eyebrow">CONFIGURED BY SCHOOL STAFF</p><h1 id="directory-title">Class directory</h1><p class="lede">Add the official grade levels and sections used for registration, verification, and report folders.</p></div>
-                </div>
-                <div class="directory-forms">
-                    <form id="grade-form" class="directory-form">
-                        <label for="grade-name">Add a grade level</label>
-                        <div class="inline-form"><input id="grade-name" name="name" maxlength="40" placeholder="e.g. Grade 7" required><button class="button button-primary" type="submit">Add grade</button></div>
-                        <p class="field-error" id="grade-error" role="alert"></p>
-                    </form>
-                    <form id="section-form" class="directory-form">
-                        <label for="section-grade">Add a section</label>
-                        <div class="inline-form"><select id="section-grade" required><option value="">Choose a grade</option></select><input id="section-name" name="name" maxlength="80" placeholder="Official section name" required><button class="button button-outline" type="submit">Add section</button></div>
-                        <p class="field-error" id="section-error" role="alert"></p>
-                    </form>
-                </div>
-                <div id="directory-list" class="directory-list" aria-live="polite"><p class="loading-state">Loading class directory…</p></div>
+                <section class="class-option-current" aria-labelledby="class-options-current-title">
+                    <div class="section-title-row"><div><p class="eyebrow">CURRENTLY AVAILABLE</p><h2 id="class-options-current-title">Active class options</h2></div></div>
+                    <div id="class-options-list" class="directory-list" aria-live="polite"><p class="loading-state">Loading class options…</p></div>
+                </section>
             </section>
         </main>
     </div>
@@ -119,7 +123,7 @@
             <button class="dialog-x" type="button" data-close-dialog aria-label="Close dialog">×</button>
             <p class="eyebrow">CAMPUS MAINTENANCE</p>
             <h2 id="report-dialog-title">Create a report</h2>
-            <p class="dialog-copy">This report will be submitted under your administrator account and appear outside class folders until assigned to a verified class.</p>
+            <p class="dialog-copy">This report will be submitted under your administrator account and appear in Unassigned Reports.</p>
             <label for="report-title">Report title</label>
             <input id="report-title" name="title" maxlength="100" placeholder="e.g. Broken light near the library" required>
             <div class="form-pair">

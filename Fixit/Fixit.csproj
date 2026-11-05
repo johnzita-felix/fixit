@@ -6,6 +6,7 @@
     <UserSecretsId>39a93d65-f286-4aeb-84f4-5da8b9387dc8</UserSecretsId>
   </PropertyGroup>
   <ItemGroup>
+    <PackageReference Include="ClosedXML" Version="0.105.0" />
     <PackageReference Include="Microsoft.EntityFrameworkCore.Sqlite" Version="8.0.22" />
   </ItemGroup>
 </Project>

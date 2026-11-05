@@ -28,7 +28,7 @@
             </button>
             <div class="account-popover" id="profile-menu" hidden>
                 <p class="account-popover-name" id="menu-name">Student</p>
-                <button type="button" data-open-settings>Profile settings</button>
+                <button type="button" data-open-settings>Settings</button>
                 <button type="button" data-logout>Sign out</button>
             </div>
         </div>
@@ -42,15 +42,11 @@
                 <p class="lede">A small repair can make a big difference to your school day.</p>
                 <p class="class-status" id="class-status" hidden></p>
             </div>
-            <button class="button button-primary button-large" type="button" data-open-report>
-                <span class="button-plus" aria-hidden="true">+</span> Submit a Report
-            </button>
         </section>
 
         <section class="summary-section" aria-label="Summary of your reports">
             <div class="summary-heading">
                 <h2>Your report activity</h2>
-                <a class="text-action" href="my_reports.html">View all my reports <span aria-hidden="true">→</span></a>
             </div>
             <div class="summary-line">
                 <div class="summary-item"><span>Total submitted</span><strong id="stat-total">—</strong></div>
@@ -64,7 +60,6 @@
             <section class="content-section recent-section" aria-labelledby="recent-heading">
                 <div class="section-title-row">
                     <div><p class="eyebrow">RECENTLY SUBMITTED</p><h2 id="recent-heading">Your latest reports</h2></div>
-                    <a class="text-action" href="my_reports.html">See history <span aria-hidden="true">→</span></a>
                 </div>
                 <div id="recent-reports" class="report-list report-list-compact" aria-live="polite">
                     <p class="loading-state">Loading your reports…</p>
@@ -83,21 +78,6 @@
         <footer class="app-footer"><span>LIFE Institute Mariveles</span><span>Campus care, together.</span></footer>
     </main>
     <button class="report-fab" type="button" data-open-report aria-label="Submit a maintenance report" title="Submit a report">+</button>
-
-    <dialog class="app-dialog" id="class-dialog" aria-labelledby="class-dialog-title">
-        <form class="dialog-panel" id="class-form">
-            <button class="dialog-x" type="button" data-close-dialog aria-label="Close dialog">×</button>
-            <p class="eyebrow">ONE-TIME PROFILE STEP</p>
-            <h2 id="class-dialog-title">Confirm your class</h2>
-            <p class="dialog-copy">Choose your current grade and section. An administrator will verify the information before your reports appear in class folders.</p>
-            <label for="profile-grade">Grade level</label>
-            <select id="profile-grade" name="gradeLevelId" required><option value="">Choose a grade level</option></select>
-            <label for="profile-section">Section</label>
-            <select id="profile-section" name="sectionId" required disabled><option value="">Choose a grade first</option></select>
-            <p class="field-error" id="class-error" role="alert"></p>
-            <button class="button button-primary button-wide" type="submit">Submit for verification</button>
-        </form>
-    </dialog>
 
     <dialog class="app-dialog" id="report-dialog" aria-labelledby="report-dialog-title">
         <form class="dialog-panel" id="report-form">
@@ -131,15 +111,27 @@
     </dialog>
 
     <dialog class="app-dialog" id="settings-dialog" aria-labelledby="settings-title">
-        <form class="dialog-panel" id="settings-form">
+        <section class="dialog-panel">
             <button class="dialog-x" type="button" data-close-dialog aria-label="Close dialog">×</button>
             <p class="eyebrow">YOUR ACCOUNT</p>
             <h2 id="settings-title">Profile settings</h2>
-            <label for="settings-name">Display name</label>
-            <input id="settings-name" name="username" maxlength="50" required>
-            <p class="field-error" id="settings-error" role="alert"></p>
-            <button class="button button-primary button-wide" type="submit">Save changes</button>
-        </form>
+            <form id="settings-form">
+                <label for="settings-name">Display name</label>
+                <input id="settings-name" name="username" maxlength="50" required>
+                <p class="field-error" id="settings-error" role="alert"></p>
+                <button class="button button-primary button-wide" type="submit">Save name</button>
+            </form>
+            <form id="class-settings-form" class="class-settings-form">
+                <div class="settings-section-heading"><h3>Grade Level and Section</h3><p>Set or update the class on your account. You can still submit reports without it.</p></div>
+                <p class="class-settings-status" id="class-settings-status" role="status"></p>
+                <label for="settings-grade">Grade level</label>
+                <select id="settings-grade" name="gradeLevelId"><option value="">Not set</option></select>
+                <label for="settings-section">Section</label>
+                <select id="settings-section" name="sectionId" disabled><option value="">Choose a grade first</option></select>
+                <p class="field-error" id="class-settings-error" role="alert"></p>
+                <button class="button button-outline button-wide" type="submit">Save class details</button>
+            </form>
+        </section>
     </dialog>
 </body>
 </html>

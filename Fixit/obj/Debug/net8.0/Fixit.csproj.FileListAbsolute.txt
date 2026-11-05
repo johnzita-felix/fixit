@@ -83,3 +83,11 @@ C:\Users\LMI\AppData\Local\Temp\fixit-ux-build\Fixit.deps.json
 C:\Users\LMI\AppData\Local\Temp\fixit-ux-build\Fixit.runtimeconfig.json
 C:\Users\LMI\AppData\Local\Temp\fixit-ux-build\Fixit.dll
 C:\Users\LMI\AppData\Local\Temp\fixit-ux-build\Fixit.pdb
+C:\Users\LMI\Desktop\Grade 12\Sagittarius\vscode\fixit\Fixit\bin\Debug\net8.0\ClosedXML.dll
+C:\Users\LMI\Desktop\Grade 12\Sagittarius\vscode\fixit\Fixit\bin\Debug\net8.0\ClosedXML.Parser.dll
+C:\Users\LMI\Desktop\Grade 12\Sagittarius\vscode\fixit\Fixit\bin\Debug\net8.0\DocumentFormat.OpenXml.dll
+C:\Users\LMI\Desktop\Grade 12\Sagittarius\vscode\fixit\Fixit\bin\Debug\net8.0\DocumentFormat.OpenXml.Framework.dll
+C:\Users\LMI\Desktop\Grade 12\Sagittarius\vscode\fixit\Fixit\bin\Debug\net8.0\ExcelNumberFormat.dll
+C:\Users\LMI\Desktop\Grade 12\Sagittarius\vscode\fixit\Fixit\bin\Debug\net8.0\RBush.dll
+C:\Users\LMI\Desktop\Grade 12\Sagittarius\vscode\fixit\Fixit\bin\Debug\net8.0\SixLabors.Fonts.dll
+C:\Users\LMI\Desktop\Grade 12\Sagittarius\vscode\fixit\Fixit\bin\Debug\net8.0\System.IO.Packaging.dll

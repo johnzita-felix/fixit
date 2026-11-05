@@ -4,6 +4,9 @@ using System.Security.Claims;
 using System.Security.Cryptography;
 using System.Text;
 using System.Threading.RateLimiting;
+using System.Xml;
+using ClosedXML.Excel;
+using DocumentFormat.OpenXml.Packaging;
 using Microsoft.AspNetCore.Authentication;
 using Microsoft.AspNetCore.Authentication.Cookies;
 using Microsoft.AspNetCore.Identity;
@@ -136,15 +139,14 @@ app.MapPost("/api/register", async (
         return Results.BadRequest(new { message = "Passwords do not match." });
 
     var hasClassChoice = request.GradeLevelId is not null || request.SectionId is not null;
-    var hasClassDirectory = await db.SchoolGrades.AnyAsync();
     if (hasClassChoice &&
         (request.GradeLevelId is null ||
          request.SectionId is null ||
          !await db.SchoolSections.AnyAsync(section =>
-             section.Id == request.SectionId && section.GradeLevelId == request.GradeLevelId)))
+             section.Id == request.SectionId && section.GradeLevelId == request.GradeLevelId && section.IsActive) ||
+         !await db.SchoolGrades.AnyAsync(grade =>
+             grade.Id == request.GradeLevelId && grade.IsActive)))
         return Results.BadRequest(new { message = "Choose a valid grade level and section from the school directory." });
-    if (hasClassDirectory && !hasClassChoice)
-        return Results.BadRequest(new { message = "Select your grade level and section to create your account." });
 
     if (await db.Users.AnyAsync(u => u.Username == username))
         return Results.Conflict(new { message = "That name is already registered. Try a different name." });
@@ -157,8 +159,7 @@ app.MapPost("/api/register", async (
         Username = username,
         Email = email,
         GradeLevelId = request.GradeLevelId,
-        SectionId = request.SectionId,
-        ClassVerificationStatus = hasClassChoice ? "Pending Verification" : "Unassigned"
+        SectionId = request.SectionId
     };
     user.PasswordHash = hasher.HashPassword(user, password);
     db.Users.Add(user);
@@ -403,8 +404,7 @@ app.MapGet("/api/me", async (HttpContext context, AppDbContext db) =>
             .Select(user => new
             {
                 user.GradeLevelId,
-                user.SectionId,
-                user.ClassVerificationStatus
+                user.SectionId
             }).SingleAsync()
     })).RequireAuthorization();
 
@@ -420,6 +420,25 @@ app.MapGet("/api/classes", async (AppDbContext db) =>
     return Results.Ok(new { grades });
 });
 
+app.MapGet("/api/admin/class-options", async (AppDbContext db) =>
+{
+    var grades = await db.SchoolGrades.AsNoTracking()
+        .OrderBy(grade => grade.SortOrder).ThenBy(grade => grade.Name)
+        .Select(grade => new AdminGradeDirectoryResponse(
+            grade.Id, grade.Name, grade.IsActive, new List<AdminSectionDirectoryResponse>()))
+        .ToListAsync();
+    var sections = await db.SchoolSections.AsNoTracking()
+        .OrderBy(section => section.SortOrder).ThenBy(section => section.Name)
+        .Select(section => new AdminSectionDirectoryResponse(
+            section.Id, section.Name, section.GradeLevelId, section.IsActive))
+        .ToListAsync();
+    var gradeById = grades.ToDictionary(grade => grade.Id);
+    foreach (var section in sections)
+        if (gradeById.TryGetValue(section.GradeLevelId, out var grade))
+            grade.Sections.Add(section);
+    return Results.Ok(new { grades });
+}).RequireAuthorization(policy => policy.RequireRole("admin"));
+
 app.MapGet("/api/profile", async (HttpContext context, AppDbContext db) =>
 {
     var userId = int.Parse(context.User.FindFirstValue(ClaimTypes.NameIdentifier)!);
@@ -431,7 +450,6 @@ app.MapGet("/api/profile", async (HttpContext context, AppDbContext db) =>
         user.Email,
         user.GradeLevelId,
         user.SectionId,
-        user.ClassVerificationStatus,
         GradeLevel = user.GradeLevelId == null
             ? null
             : await db.SchoolGrades.Where(grade => grade.Id == user.GradeLevelId)
@@ -451,182 +469,79 @@ app.MapPatch("/api/profile/class", async (
 {
     if (context.User.IsInRole("admin"))
         return Results.Forbid();
-    if (request.GradeLevelId is not int gradeLevelId ||
-        request.SectionId is not int sectionId ||
-        !await db.SchoolSections.AnyAsync(section =>
-            section.Id == sectionId && section.GradeLevelId == gradeLevelId))
+    if ((request.GradeLevelId is null) != (request.SectionId is null))
         return Results.BadRequest(new { message = "Choose a valid grade level and section from the school directory." });
+
+    if (request.GradeLevelId is int gradeLevelId && request.SectionId is int sectionId &&
+        (!await db.SchoolSections.AnyAsync(section =>
+            section.Id == sectionId && section.GradeLevelId == gradeLevelId && section.IsActive) ||
+         !await db.SchoolGrades.AnyAsync(grade => grade.Id == gradeLevelId && grade.IsActive)))
+        return Results.BadRequest(new { message = "Choose an active grade level and section from the school directory." });
 
     var userId = int.Parse(context.User.FindFirstValue(ClaimTypes.NameIdentifier)!);
     var user = await db.Users.SingleAsync(item => item.Id == userId);
-    if (user.ClassVerificationStatus == "Verified")
-        return Results.Conflict(new { message = "Your class is verified. Contact an administrator to request a change." });
-
-    user.GradeLevelId = gradeLevelId;
-    user.SectionId = sectionId;
-    user.ClassVerificationStatus = "Pending Verification";
+    user.GradeLevelId = request.GradeLevelId;
+    user.SectionId = request.SectionId;
     await db.SaveChangesAsync();
-    return Results.Ok(new { message = "Your class details were submitted for administrator verification." });
+    return Results.Ok(new { message = request.GradeLevelId is null
+        ? "Your class assignment was cleared."
+        : "Your class details were saved." });
 }).RequireAuthorization();
 
-app.MapPost("/api/admin/grade-levels", async (
-    ClassNameRequest request,
+app.MapPost("/api/admin/class-options/import/preview", async (
+    HttpRequest request,
     AppDbContext db) =>
 {
-    var name = request.Name?.Trim();
-    if (string.IsNullOrWhiteSpace(name) || name.Length > 40)
-        return Results.BadRequest(new { message = "Enter a grade-level name with 1–40 characters." });
-    if (await db.SchoolGrades.AnyAsync(grade => grade.Name.ToLower() == name.ToLower()))
-        return Results.Conflict(new { message = "That grade level is already in the directory." });
+    if (!request.HasFormContentType)
+        return Results.BadRequest(new { message = "Upload an .xlsx workbook." });
+    if (request.ContentLength > 6 * 1024 * 1024)
+        return Results.BadRequest(new { message = "The workbook must be 5 MB or smaller." });
 
-    var gradeLevel = new SchoolGrade
+    var form = await request.ReadFormAsync();
+    var file = form.Files.GetFile("file");
+    if (file is null || file.Length == 0)
+        return Results.BadRequest(new { message = "Choose an .xlsx workbook to preview." });
+    if (!string.Equals(Path.GetExtension(file.FileName), ".xlsx", StringComparison.OrdinalIgnoreCase))
+        return Results.BadRequest(new { message = "Only .xlsx workbooks are supported." });
+    if (file.Length > 5 * 1024 * 1024)
+        return Results.BadRequest(new { message = "The workbook must be 5 MB or smaller." });
+
+    try
     {
-        Name = name,
-        SortOrder = (await db.SchoolGrades.MaxAsync(grade => (int?)grade.SortOrder) ?? 0) + 1
-    };
-    db.SchoolGrades.Add(gradeLevel);
-    await db.SaveChangesAsync();
-    return Results.Created($"/api/admin/grade-levels/{gradeLevel.Id}", new { gradeLevel.Id, gradeLevel.Name });
-}).RequireAuthorization(policy => policy.RequireRole("admin"));
-
-app.MapPatch("/api/admin/grade-levels/{gradeLevelId:int}", async (
-    int gradeLevelId,
-    ClassNameRequest request,
-    AppDbContext db) =>
-{
-    var name = request.Name?.Trim();
-    if (string.IsNullOrWhiteSpace(name) || name.Length > 40)
-        return Results.BadRequest(new { message = "Enter a grade-level name with 1–40 characters." });
-    var gradeLevel = await db.SchoolGrades.SingleOrDefaultAsync(grade => grade.Id == gradeLevelId);
-    if (gradeLevel is null)
-        return Results.NotFound(new { message = "Grade level not found." });
-    if (await db.SchoolGrades.AnyAsync(grade =>
-        grade.Id != gradeLevelId && grade.Name.ToLower() == name.ToLower()))
-        return Results.Conflict(new { message = "That grade level is already in the directory." });
-    gradeLevel.Name = name;
-    await db.SaveChangesAsync();
-    return Results.Ok(new { gradeLevel.Id, gradeLevel.Name });
-}).RequireAuthorization(policy => policy.RequireRole("admin"));
-
-app.MapPost("/api/admin/grade-levels/{gradeLevelId:int}/sections", async (
-    int gradeLevelId,
-    ClassNameRequest request,
-    AppDbContext db) =>
-{
-    var name = request.Name?.Trim();
-    if (string.IsNullOrWhiteSpace(name) || name.Length > 80)
-        return Results.BadRequest(new { message = "Enter a section name with 1–80 characters." });
-    var gradeLevel = await db.SchoolGrades.SingleOrDefaultAsync(grade => grade.Id == gradeLevelId);
-    if (gradeLevel is null)
-        return Results.NotFound(new { message = "Grade level not found." });
-    if (await db.SchoolSections.AnyAsync(section =>
-        section.GradeLevelId == gradeLevelId && section.Name.ToLower() == name.ToLower()))
-        return Results.Conflict(new { message = "That section already exists in this grade level." });
-
-    var section = new SchoolSection
-    {
-        GradeLevelId = gradeLevelId,
-        Name = name,
-        SortOrder = (await db.SchoolSections
-            .Where(item => item.GradeLevelId == gradeLevelId)
-            .MaxAsync(item => (int?)item.SortOrder) ?? 0) + 1
-    };
-    db.SchoolSections.Add(section);
-    await db.SaveChangesAsync();
-    return Results.Created($"/api/admin/sections/{section.Id}", new { section.Id, section.Name, section.GradeLevelId });
-}).RequireAuthorization(policy => policy.RequireRole("admin"));
-
-app.MapPatch("/api/admin/sections/{sectionId:int}", async (
-    int sectionId,
-    ClassNameRequest request,
-    AppDbContext db) =>
-{
-    var name = request.Name?.Trim();
-    if (string.IsNullOrWhiteSpace(name) || name.Length > 80)
-        return Results.BadRequest(new { message = "Enter a section name with 1–80 characters." });
-    var section = await db.SchoolSections.SingleOrDefaultAsync(item => item.Id == sectionId);
-    if (section is null)
-        return Results.NotFound(new { message = "Section not found." });
-    if (await db.SchoolSections.AnyAsync(item =>
-        item.Id != sectionId &&
-        item.GradeLevelId == section.GradeLevelId &&
-        item.Name.ToLower() == name.ToLower()))
-        return Results.Conflict(new { message = "That section already exists in this grade level." });
-    section.Name = name;
-    await db.SaveChangesAsync();
-    return Results.Ok(new { section.Id, section.Name, section.GradeLevelId });
-}).RequireAuthorization(policy => policy.RequireRole("admin"));
-
-app.MapGet("/api/admin/class-verifications", async (AppDbContext db) =>
-{
-    var students = await db.Users.AsNoTracking()
-        .Where(user => user.Role != "admin" && user.ClassVerificationStatus != "Verified")
-        .OrderBy(user => user.Username)
-        .Select(user => new
-        {
-            user.Id,
-            user.Username,
-            user.Email,
-            user.ClassVerificationStatus,
-            user.GradeLevelId,
-            user.SectionId,
-            GradeLevel = db.SchoolGrades.Where(grade => grade.Id == user.GradeLevelId)
-                .Select(grade => grade.Name).FirstOrDefault(),
-            Section = db.SchoolSections.Where(section => section.Id == user.SectionId)
-                .Select(section => section.Name).FirstOrDefault(),
-            ReportCount = db.Reports.Count(report => report.UserId == user.Id)
-        }).ToListAsync();
-    return Results.Ok(students);
-}).RequireAuthorization(policy => policy.RequireRole("admin"));
-
-app.MapGet("/api/admin/students", async (
-    string? search,
-    AppDbContext db) =>
-{
-    var query = db.Users.AsNoTracking()
-        .Where(user => user.Role != "admin" && user.ClassVerificationStatus == "Verified");
-    if (!string.IsNullOrWhiteSpace(search))
-    {
-        var term = search.Trim();
-        query = query.Where(user =>
-            user.Username.Contains(term) || (user.Email != null && user.Email.Contains(term)));
+        await using var stream = file.OpenReadStream();
+        var rows = ReadClassOptionsWorkbook(stream);
+        var preview = await BuildClassOptionsPreviewAsync(db, rows);
+        return Results.Ok(preview);
     }
-    var students = await query.OrderBy(user => user.Username)
-        .Select(user => new
-        {
-            user.Id,
-            user.Username,
-            user.Email,
-            user.GradeLevelId,
-            user.SectionId,
-            GradeLevel = db.SchoolGrades.Where(grade => grade.Id == user.GradeLevelId)
-                .Select(grade => grade.Name).FirstOrDefault(),
-            Section = db.SchoolSections.Where(section => section.Id == user.SectionId)
-                .Select(section => section.Name).FirstOrDefault(),
-            ReportCount = db.Reports.Count(report => report.UserId == user.Id)
-        }).ToListAsync();
-    return Results.Ok(students);
+    catch (ClassOptionsImportException exception)
+    {
+        return Results.BadRequest(new { message = exception.Message, errors = exception.Errors });
+    }
+    catch (Exception exception) when (exception is InvalidDataException or IOException or
+        ArgumentException or OpenXmlPackageException or XmlException)
+    {
+        return Results.BadRequest(new { message = "The workbook could not be read. Check that it is a valid .xlsx file." });
+    }
 }).RequireAuthorization(policy => policy.RequireRole("admin"));
 
-app.MapPatch("/api/admin/users/{userId:int}/class", async (
-    int userId,
-    UpdateClassRequest request,
+app.MapPost("/api/admin/class-options/import", async (
+    ClassOptionsImportRequest request,
     AppDbContext db) =>
 {
-    if (request.GradeLevelId is not int gradeLevelId ||
-        request.SectionId is not int sectionId ||
-        !await db.SchoolSections.AnyAsync(section =>
-            section.Id == sectionId && section.GradeLevelId == gradeLevelId))
-        return Results.BadRequest(new { message = "Choose a valid grade level and section from the school directory." });
+    var validation = ValidateClassOptionRows(request.Rows);
+    if (validation.Errors.Count > 0)
+        return Results.BadRequest(new { message = "Fix the class list errors before importing.", errors = validation.Errors });
+    if (validation.Rows.Count == 0)
+        return Results.BadRequest(new { message = "The workbook must include at least one grade and section." });
 
-    var user = await db.Users.SingleOrDefaultAsync(item => item.Id == userId && item.Role != "admin");
-    if (user is null)
-        return Results.NotFound(new { message = "Student account not found." });
-    user.GradeLevelId = gradeLevelId;
-    user.SectionId = sectionId;
-    user.ClassVerificationStatus = "Verified";
-    await db.SaveChangesAsync();
-    return Results.Ok(new { message = "Student class assignment was verified.", user.Id });
+    await using var transaction = await db.Database.BeginTransactionAsync();
+    var currentPreview = await BuildClassOptionsPreviewAsync(db, validation.Rows);
+    if (!string.Equals(request.Snapshot, currentPreview.Snapshot, StringComparison.Ordinal))
+        return Results.Conflict(new { message = "Class options changed after this preview. Preview the workbook again before applying it." });
+
+    var result = await ApplyClassOptionsAsync(db, validation.Rows);
+    await transaction.CommitAsync();
+    return Results.Ok(new { message = "Class options imported. Existing student assignments and reports were preserved.", result });
 }).RequireAuthorization(policy => policy.RequireRole("admin"));
 
 app.MapGet("/api/admin/overview", async (AppDbContext db) =>
@@ -638,7 +553,7 @@ app.MapGet("/api/admin/overview", async (AppDbContext db) =>
     var reportsByGrade = await db.Reports.AsNoTracking()
         .Join(db.Users.AsNoTracking(), report => report.UserId, user => user.Id,
             (report, user) => new { report, user })
-        .Where(item => item.user.ClassVerificationStatus == "Verified" && item.user.GradeLevelId != null)
+        .Where(item => item.user.GradeLevelId != null && item.user.SectionId != null)
         .Join(db.SchoolGrades.AsNoTracking(), item => item.user.GradeLevelId, grade => grade.Id,
             (item, grade) => new { grade.Name, item.report.Id })
         .GroupBy(item => item.Name)
@@ -667,8 +582,9 @@ app.MapGet("/api/admin/overview", async (AppDbContext db) =>
         InProgress = statusCounts.GetValueOrDefault("In Progress"),
         Resolved = statusCounts.GetValueOrDefault("Resolved"),
         Rejected = statusCounts.GetValueOrDefault("Rejected"),
-        UnverifiedStudents = await db.Users.CountAsync(user =>
-            user.Role != "admin" && user.ClassVerificationStatus != "Verified"),
+        UnassignedReports = await db.Reports.CountAsync(report =>
+            db.Users.Any(user => user.Id == report.UserId &&
+                (user.GradeLevelId == null || user.SectionId == null))),
         ReportsByGrade = reportsByGrade,
         RecentActivity = recentActivity
     });
@@ -677,6 +593,7 @@ app.MapGet("/api/admin/overview", async (AppDbContext db) =>
 app.MapGet("/api/admin/report-folders/grades", async (AppDbContext db) =>
 {
     var grades = await db.SchoolGrades.AsNoTracking()
+        .Where(grade => grade.IsActive || db.Users.Any(user => user.GradeLevelId == grade.Id))
         .OrderBy(grade => grade.SortOrder).ThenBy(grade => grade.Name)
         .Select(grade => new
         {
@@ -685,8 +602,11 @@ app.MapGet("/api/admin/report-folders/grades", async (AppDbContext db) =>
             ReportCount = db.Reports.Count(report => db.Users.Any(user =>
                 user.Id == report.UserId &&
                 user.GradeLevelId == grade.Id &&
-                user.ClassVerificationStatus == "Verified")),
-            SectionCount = db.SchoolSections.Count(section => section.GradeLevelId == grade.Id)
+                user.SectionId != null)),
+            SectionCount = db.SchoolSections.Count(section =>
+                section.GradeLevelId == grade.Id &&
+                (section.IsActive || db.Users.Any(user =>
+                    user.SectionId == section.Id && user.GradeLevelId == grade.Id)))
         }).ToListAsync();
     return Results.Ok(grades);
 }).RequireAuthorization(policy => policy.RequireRole("admin"));
@@ -701,16 +621,19 @@ app.MapGet("/api/admin/report-folders/grades/{gradeLevelId:int}/sections", async
         return Results.NotFound(new { message = "Grade level not found." });
 
     var sections = await db.SchoolSections.AsNoTracking()
-        .Where(section => section.GradeLevelId == gradeLevelId)
+        .Where(section => section.GradeLevelId == gradeLevelId &&
+            (section.IsActive || db.Users.Any(user =>
+                user.SectionId == section.Id && user.GradeLevelId == gradeLevelId)))
         .OrderBy(section => section.SortOrder).ThenBy(section => section.Name)
         .Select(section => new
         {
             section.Id,
             section.Name,
+            section.IsActive,
             ReportCount = db.Reports.Count(report => db.Users.Any(user =>
                 user.Id == report.UserId &&
                 user.SectionId == section.Id &&
-                user.ClassVerificationStatus == "Verified"))
+                user.GradeLevelId == gradeLevelId))
         }).ToListAsync();
     return Results.Ok(new { gradeLevel = gradeLevel.Name, sections });
 }).RequireAuthorization(policy => policy.RequireRole("admin"));
@@ -734,7 +657,7 @@ app.MapGet("/api/admin/report-folders/sections/{sectionId:int}/reports", async (
         .Join(db.Users.AsNoTracking(), report => report.UserId, user => user.Id,
             (report, user) => new { Report = report, User = user })
         .Where(item => item.User.SectionId == sectionId &&
-                       item.User.ClassVerificationStatus == "Verified");
+                       item.User.GradeLevelId == section.Section.GradeLevelId);
     if (!string.IsNullOrWhiteSpace(status))
         query = query.Where(item => item.Report.Status == status);
     if (!string.IsNullOrWhiteSpace(category))
@@ -781,29 +704,55 @@ app.MapGet("/api/admin/report-folders/sections/{sectionId:int}/reports", async (
     });
 }).RequireAuthorization(policy => policy.RequireRole("admin"));
 
-app.MapGet("/api/admin/report-folders/unassigned", async (AppDbContext db) =>
+app.MapGet("/api/admin/report-folders/unassigned", async (
+    string? search,
+    string? status,
+    string? category,
+    string? sort,
+    AppDbContext db) =>
 {
-    var reports = await db.Reports.AsNoTracking()
+    var query = db.Reports.AsNoTracking()
         .Join(db.Users.AsNoTracking(), report => report.UserId, user => user.Id,
             (report, user) => new { Report = report, User = user })
-        .Where(item => item.User.ClassVerificationStatus != "Verified")
-        .OrderByDescending(item => item.Report.CreatedAt)
-        .Select(item => new
-        {
-            item.Report.Id,
-            item.Report.Title,
-            item.Report.Category,
-            item.Report.Location,
-            item.Report.Status,
-            item.Report.Priority,
-            item.Report.CreatedAt,
-            Reporter = item.User.Username,
-            item.User.ClassVerificationStatus,
-            GradeLevel = db.SchoolGrades.Where(grade => grade.Id == item.User.GradeLevelId)
-                .Select(grade => grade.Name).FirstOrDefault(),
-            Section = db.SchoolSections.Where(section => section.Id == item.User.SectionId)
-                .Select(section => section.Name).FirstOrDefault()
-        }).ToListAsync();
+        .Where(item => item.User.GradeLevelId == null || item.User.SectionId == null);
+    if (!string.IsNullOrWhiteSpace(status))
+        query = query.Where(item => item.Report.Status == status);
+    if (!string.IsNullOrWhiteSpace(category))
+        query = query.Where(item => item.Report.Category == category);
+    if (!string.IsNullOrWhiteSpace(search))
+    {
+        var term = search.Trim();
+        query = query.Where(item =>
+            item.Report.Title.Contains(term) ||
+            item.Report.Location.Contains(term) ||
+            item.Report.Category.Contains(term) ||
+            item.Report.Description.Contains(term) ||
+            item.User.Username.Contains(term));
+    }
+    query = sort switch
+    {
+        "oldest" => query.OrderBy(item => item.Report.CreatedAt),
+        "status" => query.OrderBy(item => item.Report.Status).ThenByDescending(item => item.Report.CreatedAt),
+        "priority" => query.OrderBy(item => item.Report.Priority == "High" ? 0 : item.Report.Priority == "Normal" ? 1 : 2)
+            .ThenByDescending(item => item.Report.CreatedAt),
+        _ => query.OrderByDescending(item => item.Report.CreatedAt)
+    };
+    var reports = await query.Select(item => new
+    {
+        item.Report.Id,
+        item.Report.Title,
+        item.Report.Description,
+        item.Report.Category,
+        item.Report.Location,
+        item.Report.Status,
+        item.Report.Priority,
+        item.Report.CreatedAt,
+        Reporter = item.User.Username,
+        GradeLevel = db.SchoolGrades.Where(grade => grade.Id == item.User.GradeLevelId)
+            .Select(grade => grade.Name).FirstOrDefault(),
+        Section = db.SchoolSections.Where(section => section.Id == item.User.SectionId)
+            .Select(section => section.Name).FirstOrDefault()
+    }).ToListAsync();
     return Results.Ok(reports);
 }).RequireAuthorization(policy => policy.RequireRole("admin"));
 
@@ -859,7 +808,6 @@ app.MapGet("/api/reports/{id:int}", async (int id, HttpContext context, AppDbCon
         .Where(user => user.Id == report.UserId)
         .Select(user => new
         {
-            user.ClassVerificationStatus,
             GradeLevel = db.SchoolGrades.Where(grade => grade.Id == user.GradeLevelId)
                 .Select(grade => grade.Name).FirstOrDefault(),
             Section = db.SchoolSections.Where(section => section.Id == user.SectionId)
@@ -894,7 +842,6 @@ app.MapGet("/api/reports/{id:int}", async (int id, HttpContext context, AppDbCon
         Reporter = isAdmin ? reporter : null,
         GradeLevel = isAdmin ? reporterClass?.GradeLevel : null,
         Section = isAdmin ? reporterClass?.Section : null,
-        ClassVerificationStatus = isAdmin ? reporterClass?.ClassVerificationStatus : null,
         AdminNotes = isAdmin ? report.AdminNotes : null,
         Photo = report.Photo is null ? null : $"data:{report.PhotoContentType ?? "image/jpeg"};base64,{Convert.ToBase64String(report.Photo)}",
         History = history
@@ -940,11 +887,6 @@ app.MapPost("/api/reports", async (
     }
 
     var userId = int.Parse(context.User.FindFirstValue(ClaimTypes.NameIdentifier)!);
-    var userHasClass = await db.Users.AnyAsync(user =>
-        user.Id == userId && user.GradeLevelId != null && user.SectionId != null);
-    if (!userHasClass)
-        return Results.BadRequest(new { message = "Complete your grade-level and section information before submitting a report." });
-
     var report = new MaintenanceReport
     {
         UserId = userId,
@@ -1183,10 +1125,13 @@ static byte[] HashVerificationCode(string code, byte[] salt) =>
 static async Task<List<GradeDirectoryResponse>> GetClassDirectoryAsync(AppDbContext db)
 {
     var grades = await db.SchoolGrades.AsNoTracking()
+        .Where(grade => grade.IsActive)
         .OrderBy(grade => grade.SortOrder).ThenBy(grade => grade.Name)
         .Select(grade => new GradeDirectoryResponse(grade.Id, grade.Name, new List<SectionDirectoryResponse>()))
         .ToListAsync();
     var sections = await db.SchoolSections.AsNoTracking()
+        .Where(section => section.IsActive && db.SchoolGrades.Any(grade =>
+            grade.Id == section.GradeLevelId && grade.IsActive))
         .OrderBy(section => section.SortOrder).ThenBy(section => section.Name)
         .Select(section => new SectionDirectoryResponse(section.Id, section.Name, section.GradeLevelId))
         .ToListAsync();
@@ -1195,6 +1140,278 @@ static async Task<List<GradeDirectoryResponse>> GetClassDirectoryAsync(AppDbCont
         if (gradeById.TryGetValue(section.GradeLevelId, out var grade))
             grade.Sections.Add(section);
     return grades;
+}
+
+static List<ClassOptionImportRow> ReadClassOptionsWorkbook(Stream stream)
+{
+    using var workbook = new XLWorkbook(stream);
+    var worksheet = workbook.Worksheets.FirstOrDefault()
+        ?? throw new ClassOptionsImportException("The workbook does not contain a worksheet.");
+    var usedRange = worksheet.RangeUsed()
+        ?? throw new ClassOptionsImportException("The worksheet is empty. Add Grade Level and Section columns.");
+    var headerRow = 1;
+    if (usedRange.FirstRow().RowNumber() != headerRow)
+        throw new ClassOptionsImportException("Grade Level and Section headings must be in the first row.");
+    var lastColumn = usedRange.LastColumn().ColumnNumber();
+    var gradeColumn = 0;
+    var sectionColumn = 0;
+    for (var column = usedRange.FirstColumn().ColumnNumber(); column <= lastColumn; column++)
+    {
+        var header = worksheet.Cell(headerRow, column).GetString().Trim();
+        if (string.Equals(header, "Grade Level", StringComparison.OrdinalIgnoreCase))
+        {
+            if (gradeColumn != 0)
+                throw new ClassOptionsImportException("The Grade Level column appears more than once.");
+            gradeColumn = column;
+        }
+        if (string.Equals(header, "Section", StringComparison.OrdinalIgnoreCase))
+        {
+            if (sectionColumn != 0)
+                throw new ClassOptionsImportException("The Section column appears more than once.");
+            sectionColumn = column;
+        }
+    }
+    if (gradeColumn == 0 || sectionColumn == 0)
+        throw new ClassOptionsImportException("The first worksheet must contain Grade Level and Section columns.");
+
+    var lastRow = usedRange.LastRow().RowNumber();
+    if (lastRow - headerRow > 2000)
+        throw new ClassOptionsImportException("The class list cannot contain more than 2,000 data rows.");
+    var rows = new List<ClassOptionImportRow>();
+    var errors = new List<string>();
+    for (var rowNumber = headerRow + 1; rowNumber <= lastRow; rowNumber++)
+    {
+        var gradeCell = worksheet.Cell(rowNumber, gradeColumn);
+        var sectionCell = worksheet.Cell(rowNumber, sectionColumn);
+        if (gradeCell.HasFormula || sectionCell.HasFormula)
+        {
+            errors.Add($"Row {rowNumber}: formulas are not allowed; enter class names as values.");
+            continue;
+        }
+        var grade = gradeCell.GetFormattedString().Trim();
+        var section = sectionCell.GetFormattedString().Trim();
+        if (grade.Length == 0 && section.Length == 0) continue;
+        if (grade.Length == 0 || section.Length == 0)
+        {
+            errors.Add($"Row {rowNumber}: both Grade Level and Section are required.");
+            continue;
+        }
+        rows.Add(new ClassOptionImportRow(grade, section));
+    }
+
+    var validation = ValidateClassOptionRows(rows);
+    errors.AddRange(validation.Errors);
+    if (errors.Count > 0)
+        throw new ClassOptionsImportException("The class list contains invalid entries.", errors);
+    return validation.Rows;
+}
+
+static ClassOptionsValidation ValidateClassOptionRows(IReadOnlyCollection<ClassOptionImportRow>? rows)
+{
+    var errors = new List<string>();
+    var normalized = new List<ClassOptionImportRow>();
+    var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+    if (rows is null)
+        return new ClassOptionsValidation(normalized, ["The import preview is missing class rows."]);
+    if (rows.Count > 2000)
+        return new ClassOptionsValidation(normalized, ["The class list cannot contain more than 2,000 rows."]);
+
+    var rowNumber = 1;
+    foreach (var row in rows)
+    {
+        rowNumber++;
+        if (row is null)
+        {
+            errors.Add($"Entry {rowNumber}: the row is empty.");
+            continue;
+        }
+        var grade = row.GradeLevel?.Trim() ?? "";
+        var section = row.Section?.Trim() ?? "";
+        if (grade.Length == 0 || section.Length == 0)
+        {
+            errors.Add($"Entry {rowNumber}: both Grade Level and Section are required.");
+            continue;
+        }
+        if (grade.Length > 40 || section.Length > 80)
+        {
+            errors.Add($"Entry {rowNumber}: grade levels are limited to 40 characters and sections to 80.");
+            continue;
+        }
+        if (grade.Any(char.IsControl) || section.Any(char.IsControl))
+        {
+            errors.Add($"Entry {rowNumber}: class names cannot contain control characters.");
+            continue;
+        }
+        var key = ClassOptionKey(grade, section);
+        if (!seen.Add(key))
+        {
+            errors.Add($"Entry {rowNumber}: “{grade} · {section}” is listed more than once.");
+            continue;
+        }
+        normalized.Add(new ClassOptionImportRow(grade, section));
+    }
+    return new ClassOptionsValidation(normalized, errors);
+}
+
+static async Task<ClassOptionsPreview> BuildClassOptionsPreviewAsync(
+    AppDbContext db,
+    IReadOnlyList<ClassOptionImportRow> rows)
+{
+    var currentGrades = await db.SchoolGrades.AsNoTracking().ToListAsync();
+    var currentSections = await db.SchoolSections.AsNoTracking().ToListAsync();
+    var snapshot = BuildClassOptionsSnapshot(currentGrades, currentSections);
+    var importedGrades = rows.Select(row => row.GradeLevel)
+        .Distinct(StringComparer.OrdinalIgnoreCase).ToList();
+    var importedSections = rows.Select(row => new ClassOptionEntry(row.GradeLevel, row.Section)).ToList();
+    var importedSectionKeys = importedSections
+        .Select(item => ClassOptionKey(item.GradeLevel, item.Section))
+        .ToHashSet(StringComparer.OrdinalIgnoreCase);
+
+    var gradesToAdd = importedGrades.Where(name =>
+        currentGrades.All(grade => !string.Equals(grade.Name, name, StringComparison.OrdinalIgnoreCase))).ToList();
+    var gradesToRestore = importedGrades.Where(name =>
+        currentGrades.Any(grade => !grade.IsActive &&
+            string.Equals(grade.Name, name, StringComparison.OrdinalIgnoreCase))).ToList();
+    var gradesToRemove = currentGrades.Where(grade => grade.IsActive &&
+        !importedGrades.Contains(grade.Name, StringComparer.OrdinalIgnoreCase))
+        .Select(grade => grade.Name).ToList();
+
+    var sectionsToAdd = importedSections.Where(item =>
+        currentSections.All(section =>
+            !string.Equals(section.Name, item.Section, StringComparison.OrdinalIgnoreCase) ||
+            !string.Equals(currentGrades.Single(grade => grade.Id == section.GradeLevelId).Name,
+                item.GradeLevel, StringComparison.OrdinalIgnoreCase)))
+        .Where(item => !currentSections.Any(section =>
+            !section.IsActive &&
+            string.Equals(section.Name, item.Section, StringComparison.OrdinalIgnoreCase) &&
+            string.Equals(currentGrades.Single(grade => grade.Id == section.GradeLevelId).Name,
+                item.GradeLevel, StringComparison.OrdinalIgnoreCase)))
+        .ToList();
+    var sectionsToRestore = importedSections.Where(item => currentSections.Any(section =>
+        !section.IsActive &&
+        string.Equals(section.Name, item.Section, StringComparison.OrdinalIgnoreCase) &&
+        string.Equals(currentGrades.Single(grade => grade.Id == section.GradeLevelId).Name,
+            item.GradeLevel, StringComparison.OrdinalIgnoreCase))).ToList();
+    var sectionsToRemove = currentSections.Where(section => section.IsActive &&
+        !importedSectionKeys.Contains(ClassOptionKey(
+            currentGrades.Single(grade => grade.Id == section.GradeLevelId).Name, section.Name)))
+        .Select(section => new ClassOptionEntry(
+            currentGrades.Single(grade => grade.Id == section.GradeLevelId).Name, section.Name))
+        .ToList();
+    var unchangedSections = importedSections.Count - sectionsToAdd.Count - sectionsToRestore.Count;
+
+    return new ClassOptionsPreview(
+        rows,
+        gradesToAdd,
+        gradesToRestore,
+        gradesToRemove,
+        sectionsToAdd,
+        sectionsToRestore,
+        sectionsToRemove,
+        unchangedSections,
+        snapshot);
+}
+
+static async Task<ClassOptionsImportResult> ApplyClassOptionsAsync(
+    AppDbContext db,
+    IReadOnlyList<ClassOptionImportRow> rows)
+{
+    var grades = await db.SchoolGrades.ToListAsync();
+    var sections = await db.SchoolSections.ToListAsync();
+    var gradeNames = rows.Select(row => row.GradeLevel)
+        .Distinct(StringComparer.OrdinalIgnoreCase).ToList();
+    var sectionKeys = rows.Select(row => ClassOptionKey(row.GradeLevel, row.Section))
+        .ToHashSet(StringComparer.OrdinalIgnoreCase);
+    var addedGrades = 0;
+    var addedSections = 0;
+    var restoredGrades = 0;
+    var restoredSections = 0;
+    var removedGrades = 0;
+    var removedSections = 0;
+
+    for (var index = 0; index < gradeNames.Count; index++)
+    {
+        var name = gradeNames[index];
+        var grade = grades.SingleOrDefault(item =>
+            string.Equals(item.Name, name, StringComparison.OrdinalIgnoreCase));
+        if (grade is null)
+        {
+            grade = new SchoolGrade { Name = name };
+            grades.Add(grade);
+            db.SchoolGrades.Add(grade);
+            addedGrades++;
+        }
+        else if (!grade.IsActive)
+        {
+            restoredGrades++;
+        }
+        grade.Name = name;
+        grade.IsActive = true;
+        grade.SortOrder = index + 1;
+    }
+
+    foreach (var grade in grades.Where(item => item.IsActive &&
+                 !gradeNames.Contains(item.Name, StringComparer.OrdinalIgnoreCase)))
+    {
+        grade.IsActive = false;
+        removedGrades++;
+    }
+
+    await db.SaveChangesAsync();
+
+    var sectionOrderByGrade = new Dictionary<int, int>();
+    foreach (var row in rows)
+    {
+        var grade = grades.Single(item =>
+            string.Equals(item.Name, row.GradeLevel, StringComparison.OrdinalIgnoreCase));
+        sectionOrderByGrade.TryGetValue(grade.Id, out var currentOrder);
+        var section = sections.SingleOrDefault(item =>
+            item.GradeLevelId == grade.Id &&
+            string.Equals(item.Name, row.Section, StringComparison.OrdinalIgnoreCase));
+        if (section is null)
+        {
+            section = new SchoolSection { GradeLevelId = grade.Id, Name = row.Section };
+            sections.Add(section);
+            db.SchoolSections.Add(section);
+            addedSections++;
+        }
+        else if (!section.IsActive)
+        {
+            restoredSections++;
+        }
+        section.Name = row.Section;
+        section.IsActive = true;
+        section.SortOrder = ++currentOrder;
+        sectionOrderByGrade[grade.Id] = currentOrder;
+    }
+
+    foreach (var section in sections.Where(item => item.IsActive &&
+                 !sectionKeys.Contains(ClassOptionKey(
+                     grades.Single(grade => grade.Id == item.GradeLevelId).Name, item.Name))))
+    {
+        section.IsActive = false;
+        removedSections++;
+    }
+
+    await db.SaveChangesAsync();
+    return new ClassOptionsImportResult(
+        addedGrades, restoredGrades, removedGrades,
+        addedSections, restoredSections, removedSections);
+}
+
+static string ClassOptionKey(string grade, string section) =>
+    $"{grade.Trim().ToUpperInvariant()}\u001f{section.Trim().ToUpperInvariant()}";
+
+static string BuildClassOptionsSnapshot(
+    IEnumerable<SchoolGrade> grades,
+    IEnumerable<SchoolSection> sections)
+{
+    var gradeNames = grades.ToDictionary(grade => grade.Id, grade => grade.Name);
+    var current = grades.Select(grade => $"G|{grade.Name}|{grade.IsActive}")
+        .Concat(sections.Select(section =>
+            $"S|{gradeNames[section.GradeLevelId]}|{section.Name}|{section.IsActive}"))
+        .OrderBy(item => item, StringComparer.OrdinalIgnoreCase);
+    return Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(string.Join('\n', current))));
 }
 
 static async Task EnsureSchoolSchemaAsync(AppDbContext db)
@@ -1209,13 +1426,15 @@ static async Task EnsureSchoolSchemaAsync(AppDbContext db)
             CREATE TABLE IF NOT EXISTS "SchoolGrades" (
                 "Id" INTEGER NOT NULL CONSTRAINT "PK_SchoolGrades" PRIMARY KEY AUTOINCREMENT,
                 "Name" TEXT NOT NULL COLLATE NOCASE,
-                "SortOrder" INTEGER NOT NULL DEFAULT 0
+                "SortOrder" INTEGER NOT NULL DEFAULT 0,
+                "IsActive" INTEGER NOT NULL DEFAULT 1
             );
             CREATE TABLE IF NOT EXISTS "SchoolSections" (
                 "Id" INTEGER NOT NULL CONSTRAINT "PK_SchoolSections" PRIMARY KEY AUTOINCREMENT,
                 "GradeLevelId" INTEGER NOT NULL,
                 "Name" TEXT NOT NULL COLLATE NOCASE,
                 "SortOrder" INTEGER NOT NULL DEFAULT 0,
+                "IsActive" INTEGER NOT NULL DEFAULT 1,
                 CONSTRAINT "FK_SchoolSections_SchoolGrades_GradeLevelId"
                     FOREIGN KEY ("GradeLevelId") REFERENCES "SchoolGrades" ("Id") ON DELETE RESTRICT
             );
@@ -1224,6 +1443,26 @@ static async Task EnsureSchoolSchemaAsync(AppDbContext db)
                 ON "SchoolSections" ("GradeLevelId", "Name" COLLATE NOCASE);
             """;
         await command.ExecuteNonQueryAsync();
+
+        foreach (var (table, column) in new[]
+                 {
+                     ("SchoolGrades", "IsActive"),
+                     ("SchoolSections", "IsActive")
+                 })
+        {
+            var tableColumns = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            await using (var info = connection.CreateCommand())
+            {
+                info.CommandText = $"PRAGMA table_info('{table}');";
+                await using var reader = await info.ExecuteReaderAsync();
+                while (await reader.ReadAsync())
+                    tableColumns.Add(reader.GetString(1));
+            }
+            if (tableColumns.Contains(column)) continue;
+            await using var alter = connection.CreateCommand();
+            alter.CommandText = $"ALTER TABLE \"{table}\" ADD COLUMN \"{column}\" INTEGER NOT NULL DEFAULT 1;";
+            await alter.ExecuteNonQueryAsync();
+        }
 
         var columns = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         await using (var info = connection.CreateCommand())
@@ -1237,8 +1476,7 @@ static async Task EnsureSchoolSchemaAsync(AppDbContext db)
         foreach (var (name, declaration) in new[]
                  {
                      ("GradeLevelId", "INTEGER NULL REFERENCES SchoolGrades(Id) ON DELETE RESTRICT"),
-                     ("SectionId", "INTEGER NULL REFERENCES SchoolSections(Id) ON DELETE RESTRICT"),
-                     ("ClassVerificationStatus", "TEXT NOT NULL DEFAULT 'Unassigned'")
+                     ("SectionId", "INTEGER NULL REFERENCES SchoolSections(Id) ON DELETE RESTRICT")
                  })
         {
             if (columns.Contains(name)) continue;
@@ -1445,9 +1683,38 @@ public record CreateReportRequest(string? Title, string? Description, string? Ca
 public record UpdateReportRequest(string? Status, string? Priority, string? Assignee, string? AdminNotes, string? PublicUpdate);
 public record UpdateProfileRequest(string? Username);
 public record UpdateClassRequest(int? GradeLevelId, int? SectionId);
-public record ClassNameRequest(string? Name);
 public record GradeDirectoryResponse(int Id, string Name, List<SectionDirectoryResponse> Sections);
 public record SectionDirectoryResponse(int Id, string Name, int GradeLevelId);
+public record AdminGradeDirectoryResponse(
+    int Id, string Name, bool IsActive, List<AdminSectionDirectoryResponse> Sections);
+public record AdminSectionDirectoryResponse(int Id, string Name, int GradeLevelId, bool IsActive);
+public record ClassOptionImportRow(string GradeLevel, string Section);
+public record ClassOptionEntry(string GradeLevel, string Section);
+public record ClassOptionsImportRequest(IReadOnlyCollection<ClassOptionImportRow>? Rows, string? Snapshot);
+public record ClassOptionsPreview(
+    IReadOnlyList<ClassOptionImportRow> Rows,
+    IReadOnlyList<string> GradesToAdd,
+    IReadOnlyList<string> GradesToRestore,
+    IReadOnlyList<string> GradesToRemove,
+    IReadOnlyList<ClassOptionEntry> SectionsToAdd,
+    IReadOnlyList<ClassOptionEntry> SectionsToRestore,
+    IReadOnlyList<ClassOptionEntry> SectionsToRemove,
+    int UnchangedSections,
+    string Snapshot);
+public record ClassOptionsValidation(List<ClassOptionImportRow> Rows, List<string> Errors);
+public record ClassOptionsImportResult(
+    int GradesAdded,
+    int GradesRestored,
+    int GradesDeactivated,
+    int SectionsAdded,
+    int SectionsRestored,
+    int SectionsDeactivated);
+
+public sealed class ClassOptionsImportException(string message, IReadOnlyList<string>? errors = null)
+    : Exception(message)
+{
+    public IReadOnlyList<string> Errors { get; } = errors ?? Array.Empty<string>();
+}
 
 public sealed class SmtpSettings
 {
@@ -1492,7 +1759,6 @@ public class AppUser
     public int SessionVersion { get; set; }
     public int? GradeLevelId { get; set; }
     public int? SectionId { get; set; }
-    public string ClassVerificationStatus { get; set; } = "Unassigned";
 }
 
 public class SchoolGrade
@@ -1500,6 +1766,7 @@ public class SchoolGrade
     public int Id { get; set; }
     public string Name { get; set; } = "";
     public int SortOrder { get; set; }
+    public bool IsActive { get; set; } = true;
 }
 
 public class SchoolSection
@@ -1508,6 +1775,7 @@ public class SchoolSection
     public int GradeLevelId { get; set; }
     public string Name { get; set; } = "";
     public int SortOrder { get; set; }
+    public bool IsActive { get; set; } = true;
 }
 
 public class PasswordResetCode

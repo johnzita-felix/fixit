@@ -98,13 +98,13 @@
                     </div>
 
                     <div class="register-field">
-                        <label for="register-grade">Grade level <span class="label-muted">class placement is verified by an administrator</span></label>
+                        <label for="register-grade">Grade level <span class="label-muted">optional</span></label>
                         <select id="register-grade" name="gradeLevelId"><option value="">Loading class directory…</option></select>
                     </div>
                     <div class="register-field">
-                        <label for="register-section">Section</label>
+                        <label for="register-section">Section <span class="label-muted">optional</span></label>
                         <select id="register-section" name="sectionId" disabled><option value="">Choose a grade first</option></select>
-                        <small class="class-help" id="class-help">Choose the class you currently attend.</small>
+                        <small class="class-help" id="class-help">You can add or update your class later in Settings. It is not required to submit reports.</small>
                     </div>
 
                     <div class="registerpw">
@@ -131,6 +131,7 @@
                         <span>Create account</span>
                         <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12h14m-6-6 6 6-6 6"/></svg>
                     </button>
+                    <button class="button button-outline button-wide register-later" id="register-later" type="submit">Set Up Later</button>
                     <p id="form-message" role="status" aria-live="polite"></p>
                 </form>
 
@@ -160,11 +161,11 @@ async function loadRegisterClasses() {
     gradeSelect.innerHTML = registerClasses.length
       ? `<option value="">Choose a grade level</option>${registerClasses.map(grade => `<option value="${grade.id}">${escapeOption(grade.name)}</option>`).join('')}`
       : '<option value="">No grade levels available</option>';
-    gradeSelect.required = registerClasses.length > 0;
+    gradeSelect.required = false;
     gradeSelect.disabled = registerClasses.length === 0;
     classHelp.textContent = registerClasses.length
-      ? 'Your selection will be reviewed by a school administrator.'
-      : 'The school class directory is not configured yet. You will be asked to complete your class profile after an administrator sets it up.';
+      ? 'You can add or update your class later in Settings. It is not required to submit reports.'
+      : 'Class choices are not available yet. You can set your class later in Settings.';
   } catch {
     gradeSelect.innerHTML = '<option value="">Class directory unavailable</option>';
     gradeSelect.disabled = true;
@@ -179,7 +180,7 @@ gradeSelect.addEventListener('change', () => {
     ? `<option value="">Choose a section</option>${sections.map(section => `<option value="${section.id}">${escapeOption(section.name)}</option>`).join('')}`
     : '<option value="">No sections configured</option>';
   sectionSelect.disabled = sections.length === 0;
-  sectionSelect.required = registerClasses.length > 0;
+  sectionSelect.required = false;
 });
 
 document.querySelectorAll('.password-toggle').forEach((toggle) => {
@@ -199,7 +200,14 @@ document.getElementById('register-form').addEventListener('submit', async (event
   event.preventDefault();
   const message = document.getElementById('form-message');
   const button = document.getElementById('registerButton');
+  const classDeferred = event.submitter?.id === 'register-later';
+  if (!classDeferred && Boolean(gradeSelect.value) !== Boolean(sectionSelect.value)) {
+    message.className = 'error';
+    message.textContent = 'Choose both a grade level and section, or select Set Up Later.';
+    return;
+  }
   button.disabled = true;
+  document.getElementById('register-later').disabled = true;
   message.className = '';
   message.textContent = 'Creating account…';
   try {
@@ -210,8 +218,8 @@ document.getElementById('register-form').addEventListener('submit', async (event
         email: document.getElementById('email').value,
         password: document.getElementById('password').value,
         confirmPassword: document.getElementById('confirmPassword').value,
-        gradeLevelId: gradeSelect.value ? Number(gradeSelect.value) : null,
-        sectionId: sectionSelect.value ? Number(sectionSelect.value) : null
+        gradeLevelId: !classDeferred && gradeSelect.value ? Number(gradeSelect.value) : null,
+        sectionId: !classDeferred && sectionSelect.value ? Number(sectionSelect.value) : null
       })
     });
     const data = await response.json();
@@ -222,7 +230,10 @@ document.getElementById('register-form').addEventListener('submit', async (event
     message.className = 'error';
     message.textContent = 'Could not connect to the server. Make sure the app is running.';
   }
-  finally { button.disabled = false; }
+  finally {
+    button.disabled = false;
+    document.getElementById('register-later').disabled = false;
+  }
 });
 loadRegisterClasses();
 </script>
