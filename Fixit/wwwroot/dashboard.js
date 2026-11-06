@@ -14,6 +14,9 @@
     let activeGradeId = null;
     let activeSectionId = null;
     let activeFolder = 'grades';
+    let showArchivedGrades = false;
+    let showArchivedSections = false;
+    let classFolderDialogState = null;
 
     const byId = id => document.getElementById(id);
     const escapeHtml = value => String(value ?? '').replace(/[&<>"']/g, character => ({
@@ -286,12 +289,36 @@
         nav.innerHTML = parts.join('');
     }
 
-    function folderRow({ id, name, count, subtitle, action, icon = '▰' }) {
-        return `<button type="button" class="folder-row" data-folder-action="${action}" data-folder-id="${id}">
-            <span class="folder-icon" aria-hidden="true">${icon}</span>
-            <span><strong>${escapeHtml(name)}</strong><small>${escapeHtml(subtitle)}</small></span>
-            <span class="folder-count">${count} ${count === 1 ? 'report' : 'reports'}</span><span class="folder-chevron" aria-hidden="true">›</span>
-        </button>`;
+    function folderIconSvg() {
+        return '<svg viewBox="0 0 32 26" focusable="false" aria-hidden="true"><path d="M2.5 5.5a2 2 0 0 1 2-2h8l3 3h12a2 2 0 0 1 2 2v12a2 2 0 0 1-2 2h-23a2 2 0 0 1-2-2z"></path><path d="M2.5 9h27"></path></svg>';
+    }
+
+    function folderMenu(type, id, name, isActive) {
+        return `<button class="folder-menu-trigger" type="button" aria-label="Actions for ${escapeHtml(name)}" aria-expanded="false" aria-haspopup="true">···</button>
+            <div class="folder-action-menu" hidden>
+                <button type="button" data-folder-manage="rename" data-folder-type="${type}" data-folder-id="${id}" data-folder-name="${escapeHtml(name)}">Rename</button>
+                <button type="button" data-folder-manage="delete" data-folder-type="${type}" data-folder-id="${id}" data-folder-name="${escapeHtml(name)}">Delete</button>
+                <button type="button" data-folder-manage="${isActive ? 'archive' : 'restore'}" data-folder-type="${type}" data-folder-id="${id}" data-folder-name="${escapeHtml(name)}">${isActive ? 'Archive' : 'Restore'}</button>
+            </div>`;
+    }
+
+    function folderCard({ id, name, type, isActive = true, sectionCount, studentCount, reportCount = 0, pendingReportCount = 0, unassignedReportCount = 0 }) {
+        const stats = type === 'grade'
+            ? `<span>${sectionCount} ${sectionCount === 1 ? 'section' : 'sections'}</span><span>${reportCount} ${reportCount === 1 ? 'report' : 'reports'}</span>`
+            : `<span>${studentCount} ${studentCount === 1 ? 'student' : 'students'}</span><span>${reportCount} ${reportCount === 1 ? 'report' : 'reports'}</span>`;
+        return `<article class="folder-card${isActive ? '' : ' is-archived'}">
+            <button type="button" class="folder-card-open" data-folder-action="${type}" data-folder-id="${id}" aria-label="Open ${escapeHtml(name)} folder">
+                <span class="folder-card-icon">${folderIconSvg()}</span>
+                <span class="folder-card-title">${escapeHtml(name)}</span>
+                <span class="folder-card-stats">${stats}</span>
+                ${!isActive ? '<span class="folder-status-badge">Archived</span>' : ''}
+                ${pendingReportCount || unassignedReportCount
+                    ? `<span class="folder-attention">${pendingReportCount ? `${pendingReportCount} pending` : ''}${pendingReportCount && unassignedReportCount ? ' · ' : ''}${unassignedReportCount ? `${unassignedReportCount} unassigned` : ''}</span>`
+                    : ''}
+                <span class="folder-open-hint">Open folder <span aria-hidden="true">↗</span></span>
+            </button>
+            <div class="folder-card-menu">${folderMenu(type, id, name, isActive)}</div>
+        </article>`;
     }
 
     function renderAdminReportTable(items) {
@@ -312,17 +339,23 @@
         byId('folder-toolbar').hidden = true;
         byId('folder-content').innerHTML = '<p class="loading-state">Loading grade folders…</p>';
         const [grades, unassigned] = await Promise.all([
-            request('/api/admin/report-folders/grades'),
+            request('/api/admin/report-folders/grades?includeArchived=true'),
             request('/api/admin/report-folders/unassigned')
         ]);
-        byId('folder-content').innerHTML = `<div class="folder-section-heading"><h2>Grade levels</h2><span class="record-count">${grades.length} configured</span></div>
-            ${grades.length ? grades.map(grade => folderRow({
-                id: grade.id, name: grade.name, count: grade.reportCount,
-                subtitle: `${grade.sectionCount} ${grade.sectionCount === 1 ? 'section' : 'sections'}`,
-                action: 'grade', icon: '▰'
-            })).join('') : emptyState('No grade levels configured', 'Import the school’s official grade levels and sections in Manage Class Options.')}
-            <div class="folder-unassigned"><div class="folder-section-heading"><h2>Reports outside class folders</h2><span class="record-count">${unassigned.length} ${unassigned.length === 1 ? 'report' : 'reports'}</span></div>
-            ${folderRow({ id: 0, name: 'Unassigned reports', count: unassigned.length, subtitle: 'Reports without a complete grade and section assignment', action: 'unassigned', icon: '○' })}</div>`;
+        const folders = grades.filter(grade => grade.isActive !== showArchivedGrades);
+        const archivedCount = grades.filter(grade => !grade.isActive).length;
+        const title = showArchivedGrades ? 'Archived grade levels' : 'Grade levels';
+        const toggle = archivedCount
+            ? `<button class="button button-quiet folder-archive-toggle" type="button" data-toggle-archived="grades" aria-pressed="${showArchivedGrades}">${showArchivedGrades ? 'Show active folders' : `View archived (${archivedCount})`}</button>`
+            : '';
+        byId('folder-content').innerHTML = `<div class="folder-section-heading"><div><h2>${title}</h2><span class="record-count">${folders.length} ${folders.length === 1 ? 'folder' : 'folders'}</span></div>${toggle}</div>
+            ${folders.length ? `<div class="folder-grid">${folders.map(grade => folderCard({
+                id: grade.id, name: grade.name, type: 'grade', isActive: grade.isActive,
+                sectionCount: grade.sectionCount, reportCount: grade.reportCount,
+                pendingReportCount: grade.pendingReportCount, unassignedReportCount: grade.unassignedReportCount
+            })).join('')}</div>` : emptyState(showArchivedGrades ? 'No archived grade levels' : 'No grade levels configured', showArchivedGrades ? 'Archived folders will appear here.' : 'Import the school’s official grade levels and sections in Manage Class Options.')}
+            <div class="folder-unassigned"><div class="folder-section-heading"><div><h2>Reports outside class folders</h2><span class="record-count">${unassigned.length} ${unassigned.length === 1 ? 'report' : 'reports'}</span></div></div>
+            <div class="folder-grid"><article class="folder-card folder-card-utility"><button type="button" class="folder-card-open" data-folder-action="unassigned" data-folder-id="0" aria-label="Open unassigned reports folder"><span class="folder-card-icon">${folderIconSvg()}</span><span class="folder-card-title">Unassigned reports</span><span class="folder-card-stats"><span>Reports without a complete class assignment</span></span><span class="folder-attention">${unassigned.length} ${unassigned.length === 1 ? 'report' : 'reports'}</span><span class="folder-open-hint">Open folder <span aria-hidden="true">↗</span></span></button></article></div></div>`;
         adminBreadcrumbs();
     }
 
@@ -333,13 +366,175 @@
         adminBreadcrumbs();
         byId('folder-toolbar').hidden = true;
         byId('folder-content').innerHTML = '<p class="loading-state">Opening grade folder…</p>';
-        const result = await request(`/api/admin/report-folders/grades/${activeGradeId}/sections`);
-        byId('folder-content').innerHTML = `<div class="folder-section-heading"><h2>${escapeHtml(result.gradeLevel)} sections</h2><span class="record-count">${result.sections.length} ${result.sections.length === 1 ? 'section' : 'sections'}</span></div>
-            ${result.sections.length ? result.sections.map(section => folderRow({
-                id: section.id, name: section.name, count: section.reportCount,
-                subtitle: section.isActive ? 'Current class option' : 'Archived option · existing assignments retained', action: 'section', icon: '▱'
-            })).join('') : emptyState('No sections configured', 'Import the official sections for this grade in Manage Class Options.')}`;
+        const result = await request(`/api/admin/report-folders/grades/${activeGradeId}/sections?includeArchived=true`);
+        const grade = classes.find(item => item.id === activeGradeId);
+        const sections = result.sections.filter(section => section.isActive !== showArchivedSections);
+        const archivedCount = result.sections.filter(section => !section.isActive).length;
+        const toggle = archivedCount
+            ? `<button class="button button-quiet folder-archive-toggle" type="button" data-toggle-archived="sections" aria-pressed="${showArchivedSections}">${showArchivedSections ? 'Show active folders' : `View archived (${archivedCount})`}</button>`
+            : '';
+        byId('folder-content').innerHTML = `<div class="folder-section-heading"><div><h2>${escapeHtml(result.gradeLevel)} sections</h2><span class="record-count">${sections.length} ${sections.length === 1 ? 'section' : 'sections'}</span></div>${toggle}</div>
+            ${sections.length ? `<div class="folder-grid">${sections.map(section => folderCard({
+                id: section.id, name: section.name, type: 'section', isActive: section.isActive,
+                studentCount: section.studentCount, reportCount: section.reportCount,
+                pendingReportCount: section.pendingReportCount
+            })).join('')}</div>` : emptyState(showArchivedSections ? 'No archived sections' : 'No sections configured', showArchivedSections ? 'Archived sections will appear here.' : 'Import or create sections in Manage Class Options.')}
+            ${grade && !grade.isActive ? '<p class="archived-parent-note">This grade level is archived. Its sections and report history remain available to administrators, but students cannot select this class.</p>' : ''}`;
         adminBreadcrumbs();
+    }
+
+    function folderEndpoint(type, id, action) {
+        return type === 'grade'
+            ? `/api/admin/class-options/grades/${id}${action === 'status' ? '/status' : action === 'check' ? '/deletion-check' : ''}`
+            : `/api/admin/class-options/sections/${id}${action === 'status' ? '/status' : action === 'check' ? '/deletion-check' : ''}`;
+    }
+
+    function openClassFolderDialog(state) {
+        classFolderDialogState = state;
+        const dialog = byId('class-folder-dialog');
+        const typeName = state.type === 'grade' ? 'grade level' : 'section';
+        const parent = state.type === 'section'
+            ? classes.find(grade => grade.sections.some(section => section.id === state.id))
+            : null;
+        const location = state.type === 'section' ? ` in ${parent?.name || 'its grade level'}` : '';
+        const parentField = byId('class-folder-parent-field');
+        const nameField = byId('class-folder-name-field');
+        const confirmField = byId('class-folder-confirm-field');
+        const nameInput = byId('class-folder-name');
+        const confirmInput = byId('class-folder-confirm-name');
+        const submit = byId('class-folder-submit');
+        const mode = state.mode;
+
+        byId('class-folder-error').textContent = '';
+        byId('class-folder-dialog-title').textContent = mode === 'create-grade' ? 'Create grade level'
+            : mode === 'create-section' ? 'Create section'
+                : mode === 'rename' ? `Rename ${typeName}`
+                    : mode === 'delete' ? `Delete ${typeName} permanently`
+                        : mode === 'archive' ? `Archive ${typeName}`
+                            : `Restore ${typeName}`;
+        byId('class-folder-dialog-eyebrow').textContent = mode.startsWith('create') ? 'NEW CLASS FOLDER' : 'FOLDER MANAGEMENT';
+        parentField.hidden = mode !== 'create-section';
+        nameField.hidden = !['create-grade', 'create-section', 'rename'].includes(mode);
+        confirmField.hidden = mode !== 'delete';
+        nameInput.value = mode === 'rename' ? state.name : '';
+        nameInput.maxLength = state.type === 'grade' ? 40 : 80;
+        confirmInput.value = '';
+        byId('class-folder-required-name').textContent = state.name || '';
+        if (mode === 'create-section') {
+            const activeGrades = classes.filter(grade => grade.isActive);
+            byId('class-folder-parent').innerHTML = activeGrades.map(grade =>
+                `<option value="${grade.id}">${escapeHtml(grade.name)}</option>`).join('');
+            if (state.gradeId) byId('class-folder-parent').value = String(state.gradeId);
+        }
+
+        if (mode === 'create-grade') {
+            byId('class-folder-dialog-copy').textContent = 'Create a grade-level folder. It will be available for student assignments as soon as it has an active section.';
+            submit.textContent = 'Create grade level';
+        } else if (mode === 'create-section') {
+            byId('class-folder-dialog-copy').textContent = 'Create a section under an active grade level. Students can select it after it is saved.';
+            submit.textContent = 'Create section';
+        } else if (mode === 'rename') {
+            byId('class-folder-dialog-copy').textContent = `Rename “${state.name}”${location}. Existing student assignments and historical reports remain linked to this folder.`;
+            submit.textContent = 'Save name';
+        } else if (mode === 'delete') {
+            byId('class-folder-dialog-copy').textContent = `Permanently delete “${state.name}”${location}. This is only allowed when no student or report history depends on it. No students or reports will be deleted.`;
+            submit.textContent = 'Delete permanently';
+        } else if (mode === 'archive') {
+            const dependencies = state.dependencies || {};
+            const countText = (count, noun) => `${count || 0} ${noun}${count === 1 ? '' : 's'}`;
+            const counts = state.type === 'grade'
+                ? `${countText(dependencies.sectionCount, 'section')}, ${countText(dependencies.studentCount, 'student')}, and ${countText(dependencies.reportCount, 'report')} are associated.`
+                : `${countText(dependencies.studentCount, 'student')} and ${countText(dependencies.reportCount, 'report')} are associated.`;
+            byId('class-folder-dialog-copy').textContent = `Archive “${state.name}”${location}. ${counts} Archiving hides this option from student dropdowns and prevents new assignments; existing assignments and historical reports remain intact and accessible to administrators.`;
+            submit.textContent = 'Archive folder';
+        } else {
+            const gradeActive = state.type !== 'section' || parent?.isActive;
+            byId('class-folder-dialog-copy').textContent = gradeActive
+                ? `Restore “${state.name}”${location}. It will again be available for new student assignments. Historical student and report records remain unchanged.`
+                : `Restore “${state.name}”${location}. Its parent grade level is archived, so students will not see it in dropdowns until that grade level is restored. Historical records remain unchanged.`;
+            submit.textContent = 'Restore folder';
+        }
+        dialog.showModal();
+        if (mode === 'rename') nameInput.focus();
+        else if (mode === 'delete') confirmInput.focus();
+        else if (nameField.hidden) submit.focus();
+        else nameInput.focus();
+    }
+
+    async function prepareFolderManagement(button) {
+        const type = button.dataset.folderType;
+        const id = Number(button.dataset.folderId);
+        const name = button.dataset.folderName;
+        const mode = button.dataset.folderManage;
+        if (mode === 'rename') {
+            openClassFolderDialog({ mode, type, id, name });
+            return;
+        }
+        if (mode === 'archive' || mode === 'delete') {
+            const dependencies = await request(folderEndpoint(type, id, 'check'));
+            openClassFolderDialog({
+                mode: mode === 'delete' && dependencies.canDelete ? 'delete' : 'archive',
+                type, id, name, dependencies
+            });
+            return;
+        }
+        openClassFolderDialog({ mode: 'restore', type, id, name });
+    }
+
+    async function submitClassFolderDialog(event) {
+        event.preventDefault();
+        const state = classFolderDialogState;
+        if (!state) return;
+        const submit = byId('class-folder-submit');
+        const error = byId('class-folder-error');
+        submit.disabled = true;
+        error.textContent = '';
+        try {
+            let result;
+            if (state.mode === 'create-grade') {
+                result = await request('/api/admin/class-options/grades', {
+                    method: 'POST',
+                    body: JSON.stringify({ name: byId('class-folder-name').value })
+                });
+            } else if (state.mode === 'create-section') {
+                const gradeId = Number(byId('class-folder-parent').value);
+                result = await request(`/api/admin/class-options/grades/${gradeId}/sections`, {
+                    method: 'POST',
+                    body: JSON.stringify({ name: byId('class-folder-name').value })
+                });
+            } else if (state.mode === 'rename') {
+                result = await request(folderEndpoint(state.type, state.id, ''), {
+                    method: 'PUT',
+                    body: JSON.stringify({ name: byId('class-folder-name').value })
+                });
+            } else if (state.mode === 'delete') {
+                if (byId('class-folder-confirm-name').value !== state.name)
+                    throw new Error('Type the folder name exactly to confirm permanent deletion.');
+                result = await request(folderEndpoint(state.type, state.id, ''), { method: 'DELETE' });
+            } else {
+                const isActive = state.mode === 'restore';
+                result = await request(folderEndpoint(state.type, state.id, 'status'), {
+                    method: 'PATCH',
+                    body: JSON.stringify({ isActive })
+                });
+            }
+            if (state.mode === 'restore' || state.mode === 'delete') {
+                if (state.type === 'grade') showArchivedGrades = false;
+                else showArchivedSections = false;
+            }
+            byId('class-folder-dialog').close();
+            classFolderDialogState = null;
+            showMessage(result.message);
+            await loadClassDirectory();
+            if (activeFolder === 'grades') await loadGradeFolders();
+            else if (activeFolder === 'sections') await loadSectionFolders(activeGradeId);
+            else if (activeFolder === 'reports') await loadSectionReports();
+            await loadAdminOverview();
+        } catch (requestError) {
+            error.textContent = requestError.message;
+        } finally {
+            submit.disabled = false;
+        }
     }
 
     async function loadSectionReports() {
@@ -663,6 +858,17 @@
     }
 
     function setupAdminActions() {
+        byId('class-folder-form').addEventListener('submit', submitClassFolderDialog);
+        document.querySelector('[data-create-grade]').addEventListener('click', () => {
+            openClassFolderDialog({ mode: 'create-grade', type: 'grade' });
+        });
+        document.querySelector('[data-create-section]').addEventListener('click', () => {
+            if (!classes.some(grade => grade.isActive)) {
+                showMessage('Create or restore a grade level before adding sections.', true);
+                return;
+            }
+            openClassFolderDialog({ mode: 'create-section', type: 'section' });
+        });
         document.querySelectorAll('[data-view]').forEach(button => button.addEventListener('click', () => {
             showAdminPanel(button.dataset.view).catch(error => showMessage(error.message, true));
         }));
@@ -682,11 +888,37 @@
             work.catch(error => showMessage(error.message, true));
         });
         byId('folder-content').addEventListener('click', event => {
+            const menuTrigger = event.target.closest('.folder-menu-trigger');
+            if (menuTrigger) {
+                const menu = menuTrigger.nextElementSibling;
+                const opening = menu.hidden;
+                byId('folder-content').querySelectorAll('.folder-action-menu').forEach(item => { item.hidden = true; });
+                byId('folder-content').querySelectorAll('.folder-menu-trigger').forEach(item => item.setAttribute('aria-expanded', 'false'));
+                menu.hidden = !opening;
+                menuTrigger.setAttribute('aria-expanded', String(opening));
+                return;
+            }
+            const archivedToggle = event.target.closest('[data-toggle-archived]');
+            if (archivedToggle) {
+                if (archivedToggle.dataset.toggleArchived === 'grades') {
+                    showArchivedGrades = !showArchivedGrades;
+                    loadGradeFolders().catch(error => showMessage(error.message, true));
+                } else {
+                    showArchivedSections = !showArchivedSections;
+                    loadSectionFolders(activeGradeId).catch(error => showMessage(error.message, true));
+                }
+                return;
+            }
+            const manageButton = event.target.closest('[data-folder-manage]');
+            if (manageButton) {
+                prepareFolderManagement(manageButton).catch(error => showMessage(error.message, true));
+                return;
+            }
             const button = event.target.closest('[data-folder-action]');
             if (!button) return;
             const action = button.dataset.folderAction;
             const work = action === 'grade'
-                ? loadSectionFolders(Number(button.dataset.folderId))
+                ? (showArchivedSections = false, loadSectionFolders(Number(button.dataset.folderId)))
                 : action === 'section'
                     ? (activeSectionId = Number(button.dataset.folderId), loadSectionReports())
                     : loadUnassignedReports();

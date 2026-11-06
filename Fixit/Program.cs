@@ -439,6 +439,240 @@ app.MapGet("/api/admin/class-options", async (AppDbContext db) =>
     return Results.Ok(new { grades });
 }).RequireAuthorization(policy => policy.RequireRole("admin"));
 
+app.MapPost("/api/admin/class-options/grades", async (
+    CreateClassFolderRequest request,
+    AppDbContext db,
+    CancellationToken cancellationToken) =>
+{
+    var name = NormalizeClassFolderName(request.Name, 40);
+    if (name is null)
+        return Results.BadRequest(new { message = "Grade level names are required and limited to 40 characters." });
+    if (await db.SchoolGrades.AnyAsync(grade => grade.Name == name, cancellationToken))
+        return Results.Conflict(new { message = "A grade level with that name already exists." });
+
+    var grade = new SchoolGrade
+    {
+        Name = name,
+        SortOrder = await db.SchoolGrades.CountAsync(cancellationToken) + 1
+    };
+    db.SchoolGrades.Add(grade);
+    await db.SaveChangesAsync(cancellationToken);
+    return Results.Ok(new { id = grade.Id, name = grade.Name, message = "Grade level created." });
+}).RequireAuthorization(policy => policy.RequireRole("admin"));
+
+app.MapPut("/api/admin/class-options/grades/{gradeLevelId:int}", async (
+    int gradeLevelId,
+    RenameClassFolderRequest request,
+    AppDbContext db,
+    CancellationToken cancellationToken) =>
+{
+    var grade = await db.SchoolGrades.SingleOrDefaultAsync(item => item.Id == gradeLevelId, cancellationToken);
+    if (grade is null) return Results.NotFound(new { message = "Grade level not found." });
+    var name = NormalizeClassFolderName(request.Name, 40);
+    if (name is null)
+        return Results.BadRequest(new { message = "Grade level names are required and limited to 40 characters." });
+    if (await db.SchoolGrades.AnyAsync(item => item.Id != gradeLevelId && item.Name == name, cancellationToken))
+        return Results.Conflict(new { message = "A grade level with that name already exists." });
+    grade.Name = name;
+    await db.SaveChangesAsync(cancellationToken);
+    return Results.Ok(new { id = grade.Id, name = grade.Name, message = "Grade level renamed." });
+}).RequireAuthorization(policy => policy.RequireRole("admin"));
+
+app.MapPatch("/api/admin/class-options/grades/{gradeLevelId:int}/status", async (
+    int gradeLevelId,
+    UpdateClassFolderStatusRequest request,
+    AppDbContext db,
+    CancellationToken cancellationToken) =>
+{
+    var grade = await db.SchoolGrades.SingleOrDefaultAsync(item => item.Id == gradeLevelId, cancellationToken);
+    if (grade is null) return Results.NotFound(new { message = "Grade level not found." });
+    if (request.IsActive is not bool isActive)
+        return Results.BadRequest(new { message = "Choose whether to archive or restore the grade level." });
+    grade.IsActive = isActive;
+    await db.SaveChangesAsync(cancellationToken);
+    return Results.Ok(new { message = isActive ? "Grade level restored." : "Grade level archived." });
+}).RequireAuthorization(policy => policy.RequireRole("admin"));
+
+app.MapGet("/api/admin/class-options/grades/{gradeLevelId:int}/deletion-check", async (
+    int gradeLevelId,
+    AppDbContext db,
+    CancellationToken cancellationToken) =>
+{
+    var grade = await db.SchoolGrades.AsNoTracking()
+        .SingleOrDefaultAsync(item => item.Id == gradeLevelId, cancellationToken);
+    if (grade is null) return Results.NotFound(new { message = "Grade level not found." });
+    var sectionIds = db.SchoolSections.Where(section => section.GradeLevelId == gradeLevelId)
+        .Select(section => section.Id);
+    var sectionCount = await db.SchoolSections.CountAsync(
+        section => section.GradeLevelId == gradeLevelId, cancellationToken);
+    var studentCount = await db.Users.CountAsync(user =>
+        user.GradeLevelId == gradeLevelId || (user.SectionId != null && sectionIds.Contains(user.SectionId.Value)),
+        cancellationToken);
+    var reportCount = await db.Reports.CountAsync(report => db.Users.Any(user =>
+        user.Id == report.UserId &&
+        (user.GradeLevelId == gradeLevelId || (user.SectionId != null && sectionIds.Contains(user.SectionId.Value)))),
+        cancellationToken);
+    return Results.Ok(new
+    {
+        canDelete = sectionCount == 0 && studentCount == 0 && reportCount == 0,
+        sectionCount,
+        studentCount,
+        reportCount
+    });
+}).RequireAuthorization(policy => policy.RequireRole("admin"));
+
+app.MapDelete("/api/admin/class-options/grades/{gradeLevelId:int}", async (
+    int gradeLevelId,
+    AppDbContext db,
+    CancellationToken cancellationToken) =>
+{
+    await using var transaction = await db.Database.BeginTransactionAsync(cancellationToken);
+    var grade = await db.SchoolGrades.SingleOrDefaultAsync(item => item.Id == gradeLevelId, cancellationToken);
+    if (grade is null) return Results.NotFound(new { message = "Grade level not found." });
+    var sectionIds = db.SchoolSections.Where(section => section.GradeLevelId == gradeLevelId)
+        .Select(section => section.Id);
+    var hasSections = await db.SchoolSections.AnyAsync(
+        section => section.GradeLevelId == gradeLevelId, cancellationToken);
+    var hasStudents = await db.Users.AnyAsync(user =>
+        user.GradeLevelId == gradeLevelId || (user.SectionId != null && sectionIds.Contains(user.SectionId.Value)),
+        cancellationToken);
+    var hasReports = await db.Reports.AnyAsync(report => db.Users.Any(user =>
+        user.Id == report.UserId &&
+        (user.GradeLevelId == gradeLevelId || (user.SectionId != null && sectionIds.Contains(user.SectionId.Value)))),
+        cancellationToken);
+    if (hasSections || hasStudents || hasReports)
+        return Results.Conflict(new
+        {
+            message = "This grade level cannot be permanently deleted because it contains sections or has student/report history. Archive it instead.",
+            hasSections,
+            hasStudents,
+            hasReports
+        });
+
+    db.SchoolGrades.Remove(grade);
+    try
+    {
+        await db.SaveChangesAsync(cancellationToken);
+        await transaction.CommitAsync(cancellationToken);
+    }
+    catch (DbUpdateException exception) when (exception.InnerException is SqliteException
+        { SqliteExtendedErrorCode: 787 })
+    {
+        return Results.Conflict(new { message = "This grade level is still referenced by existing records. Archive it instead." });
+    }
+    return Results.Ok(new { message = "Grade level permanently deleted." });
+}).RequireAuthorization(policy => policy.RequireRole("admin"));
+
+app.MapPost("/api/admin/class-options/grades/{gradeLevelId:int}/sections", async (
+    int gradeLevelId,
+    CreateClassFolderRequest request,
+    AppDbContext db,
+    CancellationToken cancellationToken) =>
+{
+    var grade = await db.SchoolGrades.SingleOrDefaultAsync(item => item.Id == gradeLevelId, cancellationToken);
+    if (grade is null) return Results.NotFound(new { message = "Grade level not found." });
+    if (!grade.IsActive)
+        return Results.Conflict(new { message = "Restore the grade level before adding sections." });
+    var name = NormalizeClassFolderName(request.Name, 80);
+    if (name is null)
+        return Results.BadRequest(new { message = "Section names are required and limited to 80 characters." });
+    if (await db.SchoolSections.AnyAsync(section =>
+            section.GradeLevelId == gradeLevelId && section.Name == name, cancellationToken))
+        return Results.Conflict(new { message = "A section with that name already exists in this grade level." });
+
+    var section = new SchoolSection
+    {
+        GradeLevelId = gradeLevelId,
+        Name = name,
+        SortOrder = await db.SchoolSections.CountAsync(
+            item => item.GradeLevelId == gradeLevelId, cancellationToken) + 1
+    };
+    db.SchoolSections.Add(section);
+    await db.SaveChangesAsync(cancellationToken);
+    return Results.Ok(new { id = section.Id, name = section.Name, message = "Section created." });
+}).RequireAuthorization(policy => policy.RequireRole("admin"));
+
+app.MapPut("/api/admin/class-options/sections/{sectionId:int}", async (
+    int sectionId,
+    RenameClassFolderRequest request,
+    AppDbContext db,
+    CancellationToken cancellationToken) =>
+{
+    var section = await db.SchoolSections.SingleOrDefaultAsync(item => item.Id == sectionId, cancellationToken);
+    if (section is null) return Results.NotFound(new { message = "Section not found." });
+    var name = NormalizeClassFolderName(request.Name, 80);
+    if (name is null)
+        return Results.BadRequest(new { message = "Section names are required and limited to 80 characters." });
+    if (await db.SchoolSections.AnyAsync(item =>
+            item.Id != sectionId && item.GradeLevelId == section.GradeLevelId && item.Name == name, cancellationToken))
+        return Results.Conflict(new { message = "A section with that name already exists in this grade level." });
+    section.Name = name;
+    await db.SaveChangesAsync(cancellationToken);
+    return Results.Ok(new { id = section.Id, name = section.Name, message = "Section renamed." });
+}).RequireAuthorization(policy => policy.RequireRole("admin"));
+
+app.MapPatch("/api/admin/class-options/sections/{sectionId:int}/status", async (
+    int sectionId,
+    UpdateClassFolderStatusRequest request,
+    AppDbContext db,
+    CancellationToken cancellationToken) =>
+{
+    var section = await db.SchoolSections.SingleOrDefaultAsync(item => item.Id == sectionId, cancellationToken);
+    if (section is null) return Results.NotFound(new { message = "Section not found." });
+    if (request.IsActive is not bool isActive)
+        return Results.BadRequest(new { message = "Choose whether to archive or restore the section." });
+    section.IsActive = isActive;
+    await db.SaveChangesAsync(cancellationToken);
+    return Results.Ok(new { message = isActive ? "Section restored." : "Section archived." });
+}).RequireAuthorization(policy => policy.RequireRole("admin"));
+
+app.MapGet("/api/admin/class-options/sections/{sectionId:int}/deletion-check", async (
+    int sectionId,
+    AppDbContext db,
+    CancellationToken cancellationToken) =>
+{
+    var section = await db.SchoolSections.AsNoTracking()
+        .SingleOrDefaultAsync(item => item.Id == sectionId, cancellationToken);
+    if (section is null) return Results.NotFound(new { message = "Section not found." });
+    var studentCount = await db.Users.CountAsync(user => user.SectionId == sectionId, cancellationToken);
+    var reportCount = await db.Reports.CountAsync(report =>
+        db.Users.Any(user => user.Id == report.UserId && user.SectionId == sectionId), cancellationToken);
+    return Results.Ok(new { canDelete = studentCount == 0 && reportCount == 0, studentCount, reportCount });
+}).RequireAuthorization(policy => policy.RequireRole("admin"));
+
+app.MapDelete("/api/admin/class-options/sections/{sectionId:int}", async (
+    int sectionId,
+    AppDbContext db,
+    CancellationToken cancellationToken) =>
+{
+    await using var transaction = await db.Database.BeginTransactionAsync(cancellationToken);
+    var section = await db.SchoolSections.SingleOrDefaultAsync(item => item.Id == sectionId, cancellationToken);
+    if (section is null) return Results.NotFound(new { message = "Section not found." });
+    var hasStudents = await db.Users.AnyAsync(user => user.SectionId == sectionId, cancellationToken);
+    var hasReports = await db.Reports.AnyAsync(report =>
+        db.Users.Any(user => user.Id == report.UserId && user.SectionId == sectionId), cancellationToken);
+    if (hasStudents || hasReports)
+        return Results.Conflict(new
+        {
+            message = "This section cannot be permanently deleted because students or reports are associated with it. Archive it instead.",
+            hasStudents,
+            hasReports
+        });
+
+    db.SchoolSections.Remove(section);
+    try
+    {
+        await db.SaveChangesAsync(cancellationToken);
+        await transaction.CommitAsync(cancellationToken);
+    }
+    catch (DbUpdateException exception) when (exception.InnerException is SqliteException
+        { SqliteExtendedErrorCode: 787 })
+    {
+        return Results.Conflict(new { message = "This section is still referenced by existing records. Archive it instead." });
+    }
+    return Results.Ok(new { message = "Section permanently deleted." });
+}).RequireAuthorization(policy => policy.RequireRole("admin"));
+
 app.MapGet("/api/profile", async (HttpContext context, AppDbContext db) =>
 {
     var userId = int.Parse(context.User.FindFirstValue(ClaimTypes.NameIdentifier)!);
@@ -590,51 +824,63 @@ app.MapGet("/api/admin/overview", async (AppDbContext db) =>
     });
 }).RequireAuthorization(policy => policy.RequireRole("admin"));
 
-app.MapGet("/api/admin/report-folders/grades", async (AppDbContext db) =>
+app.MapGet("/api/admin/report-folders/grades", async (
+    bool? includeArchived,
+    AppDbContext db,
+    CancellationToken cancellationToken) =>
 {
     var grades = await db.SchoolGrades.AsNoTracking()
-        .Where(grade => grade.IsActive || db.Users.Any(user => user.GradeLevelId == grade.Id))
+        .Where(grade => includeArchived == true || grade.IsActive)
         .OrderBy(grade => grade.SortOrder).ThenBy(grade => grade.Name)
         .Select(grade => new
         {
             grade.Id,
             grade.Name,
-            ReportCount = db.Reports.Count(report => db.Users.Any(user =>
-                user.Id == report.UserId &&
-                user.GradeLevelId == grade.Id &&
-                user.SectionId != null)),
+            grade.IsActive,
+            ReportCount = db.Reports.Count(report =>
+                db.Users.Any(user => user.Id == report.UserId && user.GradeLevelId == grade.Id)),
+            PendingReportCount = db.Reports.Count(report => report.Status == "Pending" &&
+                db.Users.Any(user => user.Id == report.UserId && user.GradeLevelId == grade.Id)),
+            UnassignedReportCount = db.Reports.Count(report =>
+                db.Users.Any(user => user.Id == report.UserId &&
+                    user.GradeLevelId == grade.Id && user.SectionId == null)),
             SectionCount = db.SchoolSections.Count(section =>
                 section.GradeLevelId == grade.Id &&
-                (section.IsActive || db.Users.Any(user =>
-                    user.SectionId == section.Id && user.GradeLevelId == grade.Id)))
-        }).ToListAsync();
+                (includeArchived == true || section.IsActive))
+        }).ToListAsync(cancellationToken);
     return Results.Ok(grades);
 }).RequireAuthorization(policy => policy.RequireRole("admin"));
 
 app.MapGet("/api/admin/report-folders/grades/{gradeLevelId:int}/sections", async (
     int gradeLevelId,
-    AppDbContext db) =>
+    bool? includeArchived,
+    AppDbContext db,
+    CancellationToken cancellationToken) =>
 {
     var gradeLevel = await db.SchoolGrades.AsNoTracking()
-        .SingleOrDefaultAsync(grade => grade.Id == gradeLevelId);
+        .SingleOrDefaultAsync(grade => grade.Id == gradeLevelId, cancellationToken);
     if (gradeLevel is null)
         return Results.NotFound(new { message = "Grade level not found." });
 
     var sections = await db.SchoolSections.AsNoTracking()
         .Where(section => section.GradeLevelId == gradeLevelId &&
-            (section.IsActive || db.Users.Any(user =>
-                user.SectionId == section.Id && user.GradeLevelId == gradeLevelId)))
+            (includeArchived == true || section.IsActive))
         .OrderBy(section => section.SortOrder).ThenBy(section => section.Name)
         .Select(section => new
         {
             section.Id,
             section.Name,
             section.IsActive,
+            StudentCount = db.Users.Count(user =>
+                user.SectionId == section.Id && user.GradeLevelId == gradeLevelId),
             ReportCount = db.Reports.Count(report => db.Users.Any(user =>
                 user.Id == report.UserId &&
                 user.SectionId == section.Id &&
-                user.GradeLevelId == gradeLevelId))
-        }).ToListAsync();
+                user.GradeLevelId == gradeLevelId)),
+            PendingReportCount = db.Reports.Count(report => report.Status == "Pending" &&
+                db.Users.Any(user => user.Id == report.UserId &&
+                    user.SectionId == section.Id && user.GradeLevelId == gradeLevelId))
+        }).ToListAsync(cancellationToken);
     return Results.Ok(new { gradeLevel = gradeLevel.Name, sections });
 }).RequireAuthorization(policy => policy.RequireRole("admin"));
 
@@ -1253,6 +1499,16 @@ static ClassOptionsValidation ValidateClassOptionRows(IReadOnlyCollection<ClassO
     return new ClassOptionsValidation(normalized, errors);
 }
 
+static string? NormalizeClassFolderName(string? value, int maxLength)
+{
+    var name = value?.Trim();
+    return string.IsNullOrWhiteSpace(name) ||
+           name.Length > maxLength ||
+           name.Any(char.IsControl)
+        ? null
+        : name;
+}
+
 static async Task<ClassOptionsPreview> BuildClassOptionsPreviewAsync(
     AppDbContext db,
     IReadOnlyList<ClassOptionImportRow> rows)
@@ -1683,6 +1939,9 @@ public record CreateReportRequest(string? Title, string? Description, string? Ca
 public record UpdateReportRequest(string? Status, string? Priority, string? Assignee, string? AdminNotes, string? PublicUpdate);
 public record UpdateProfileRequest(string? Username);
 public record UpdateClassRequest(int? GradeLevelId, int? SectionId);
+public record CreateClassFolderRequest(string? Name);
+public record RenameClassFolderRequest(string? Name);
+public record UpdateClassFolderStatusRequest(bool? IsActive);
 public record GradeDirectoryResponse(int Id, string Name, List<SectionDirectoryResponse> Sections);
 public record SectionDirectoryResponse(int Id, string Name, int GradeLevelId);
 public record AdminGradeDirectoryResponse(

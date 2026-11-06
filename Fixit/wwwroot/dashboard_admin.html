@@ -82,6 +82,10 @@
                 <div class="admin-page-heading">
                     <div><p class="eyebrow">SCHOOL CLASS LIST</p><h1 id="class-options-title">Manage Class Options</h1><p class="lede">Import the current grade levels and sections from an Excel workbook. Existing student assignments and reports are kept if an option is removed.</p></div>
                 </div>
+                <div class="class-management-actions" aria-label="Create class folders">
+                    <button class="button button-outline" type="button" data-create-grade>＋ New grade level</button>
+                    <button class="button button-outline" type="button" data-create-section>＋ New section</button>
+                </div>
                 <div class="class-import-layout">
                     <section class="class-import-instructions">
                         <h2>Workbook format</h2>
@@ -111,6 +115,7 @@
                 </section>
                 <section class="class-option-current" aria-labelledby="class-options-current-title">
                     <div class="section-title-row"><div><p class="eyebrow">CURRENTLY AVAILABLE</p><h2 id="class-options-current-title">Active class options</h2></div></div>
+                    <p class="class-options-help">Use Report management folder actions to rename, archive, restore, or permanently delete folders that have no dependencies. Archived folders remain available there for report history.</p>
                     <div id="class-options-list" class="directory-list" aria-live="polite"><p class="loading-state">Loading class options…</p></div>
                 </section>
             </section>
@@ -171,6 +176,32 @@
             <label for="settings-name">Display name</label><input id="settings-name" name="username" maxlength="50" required>
             <p class="field-error" id="settings-error" role="alert"></p>
             <button class="button button-primary button-wide" type="submit">Save changes</button>
+        </form>
+    </dialog>
+
+    <dialog class="app-dialog" id="class-folder-dialog" aria-labelledby="class-folder-dialog-title">
+        <form class="dialog-panel class-folder-dialog-panel" id="class-folder-form">
+            <button class="dialog-x" type="button" data-close-dialog aria-label="Close dialog">×</button>
+            <p class="eyebrow" id="class-folder-dialog-eyebrow">FOLDER MANAGEMENT</p>
+            <h2 id="class-folder-dialog-title">Manage folder</h2>
+            <p class="dialog-copy" id="class-folder-dialog-copy"></p>
+            <div id="class-folder-parent-field" hidden>
+                <label for="class-folder-parent">Grade level</label>
+                <select id="class-folder-parent" name="gradeLevelId"></select>
+            </div>
+            <div id="class-folder-name-field">
+                <label for="class-folder-name">Folder name</label>
+                <input id="class-folder-name" name="name" maxlength="80" autocomplete="off">
+            </div>
+            <div id="class-folder-confirm-field" hidden>
+                <label for="class-folder-confirm-name">Type <strong id="class-folder-required-name"></strong> to confirm permanent deletion</label>
+                <input id="class-folder-confirm-name" name="confirmName" autocomplete="off">
+            </div>
+            <p class="field-error" id="class-folder-error" role="alert"></p>
+            <div class="dialog-actions">
+                <button class="button button-primary" id="class-folder-submit" type="submit">Save</button>
+                <button class="button button-quiet" type="button" data-close-dialog>Cancel</button>
+            </div>
         </form>
     </dialog>
     <p class="page-message admin-global-message" id="admin-global-message" role="status" aria-live="polite"></p>
