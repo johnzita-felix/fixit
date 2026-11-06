@@ -493,9 +493,9 @@ a {
 }
 
 .form-legal {
-    margin: 24px 0 0;
+    margin: 25px 20px 0;
     color: #8894a0;
-    font-size: 10px;
+    font-size: 15px;
 }
 
 .form-legal span {
@@ -1934,7 +1934,7 @@ textarea:focus-visible {
 }
 
 .form-panel {
-    padding: 48px clamp(24px, 6vw, 78px);
+    padding: 48px clamp(24px, -4vw, 78px);
     background: #f5f7f9;
 }
 
