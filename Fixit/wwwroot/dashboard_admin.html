@@ -35,8 +35,8 @@
             <p class="nav-caption">WORKSPACE</p>
             <button class="admin-nav-link is-active" type="button" data-view="overview"><span aria-hidden="true">◫</span> Overview</button>
             <button class="admin-nav-link" type="button" data-view="reports"><span aria-hidden="true">▤</span> Report management</button>
-            <button class="admin-nav-link" type="button" data-view="classes"><span aria-hidden="true">▦</span> Manage Class Options</button>
-            <div class="nav-school-note"><span class="school-monogram small-monogram" aria-hidden="true" style="margin-top: 390px;">LI</span><span>LIFE Institute<br><small>Mariveles</small></span></div>
+            <button class="admin-nav-link" type="button" data-view="classes"><span aria-hidden="true">▦</span> Class Management</button>
+            <div class="nav-school-note"><span class="school-monogram small-monogram" aria-hidden="true">LI</span><span>LIFE Institute<br><small>Mariveles</small></span></div>
         </nav>
 
         <main class="admin-main">
@@ -78,15 +78,23 @@
                 <div id="folder-content" class="folder-content" aria-live="polite"><p class="loading-state">Loading report folders…</p></div>
             </section>
 
-            <section class="admin-panel" data-panel="classes" aria-labelledby="class-options-title" hidden>
-                <div class="admin-page-heading">
-                    <div><p class="eyebrow">SCHOOL CLASS LIST</p><h1 id="class-options-title">Manage Class Options</h1><p class="lede">Import the current grade levels and sections from an Excel workbook. Existing student assignments and reports are kept if an option is removed.</p></div>
+            <section class="admin-panel class-workspace" id="class-workspace" data-panel="classes" aria-labelledby="class-options-title" hidden>
+                <nav class="class-workspace-breadcrumb" id="class-workspace-breadcrumb" aria-label="Class folder location"></nav>
+                <div class="class-workspace-heading">
+                    <div><p class="eyebrow">LIFE INSTITUTE · MARIVELES</p><h1 id="class-options-title">Class Management</h1><p class="lede" id="class-workspace-lede">Manage grade levels and sections for student assignments.</p></div>
+                    <div class="class-workspace-actions" aria-label="Class management actions">
+                        <button class="button button-outline" id="open-class-import" type="button" aria-expanded="false" aria-controls="class-import-panel">Import Excel list</button>
+                        <button class="button button-primary" type="button" data-create-grade><span aria-hidden="true">＋</span> Add Grade Level</button>
+                        <button class="button button-primary" id="add-class-section" type="button" data-create-section hidden><span aria-hidden="true">＋</span> Add Section</button>
+                    </div>
                 </div>
-                <div class="class-management-actions" aria-label="Create class folders">
-                    <button class="button button-outline" type="button" data-create-grade>＋ New grade level</button>
-                    <button class="button button-outline" type="button" data-create-section>＋ New section</button>
-                </div>
-                <div class="class-import-layout">
+                <div class="class-workspace-summary" id="class-workspace-summary"></div>
+                <section id="class-folder-workspace" class="class-folder-workspace" aria-live="polite">
+                    <p class="loading-state">Loading grade levels…</p>
+                </section>
+                <details id="class-import-panel" class="class-import-panel">
+                    <summary><span>Import class list</span><small>Upload an Excel workbook to update grade and section options</small></summary>
+                    <div class="class-import-layout">
                     <section class="class-import-instructions">
                         <h2>Workbook format</h2>
                         <p>Use the first worksheet. The first row must contain <strong>Grade Level</strong> and <strong>Section</strong> headings. Leave fully blank rows out or use them as spacing.</p>
@@ -94,7 +102,7 @@
                             <div role="row"><strong role="columnheader">Grade Level</strong><strong role="columnheader">Section</strong></div>
                             <div role="row"><span role="cell">Grade 7</span><span role="cell">Section A</span></div>
                             <div role="row"><span role="cell">Grade 7</span><span role="cell">Section B</span></div>
-                        </div>
+                            </div>
                         <p class="label-muted">Importing replaces the available dropdown choices. Removed options are archived, not deleted, and students are never reassigned automatically.</p>
                     </section>
                     <form id="class-import-form" class="class-import-form">
@@ -113,11 +121,7 @@
                         <button class="button button-quiet" id="cancel-class-import" type="button">Cancel preview</button>
                     </div>
                 </section>
-                <section class="class-option-current" aria-labelledby="class-options-current-title">
-                    <div class="section-title-row"><div><p class="eyebrow">CURRENTLY AVAILABLE</p><h2 id="class-options-current-title">Active class options</h2></div></div>
-                    <p class="class-options-help">Use Report management folder actions to rename, archive, restore, or permanently delete folders that have no dependencies. Archived folders remain available there for report history.</p>
-                    <div id="class-options-list" class="directory-list" aria-live="polite"><p class="loading-state">Loading class options…</p></div>
-                </section>
+                </details>
             </section>
         </main>
     </div>
