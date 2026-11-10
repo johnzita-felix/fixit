@@ -23,6 +23,11 @@
 }
 
 * { box-sizing: border-box; }
+* { scrollbar-color: #8a4b58 #f3efec; scrollbar-width: thin; }
+*::-webkit-scrollbar { width: 8px; height: 8px; }
+*::-webkit-scrollbar-track { background: #f3efec; }
+*::-webkit-scrollbar-thumb { border: 2px solid #f3efec; border-radius: 999px; background: #8a4b58; }
+*::-webkit-scrollbar-thumb:hover { background: var(--maroon-deep); }
 html { min-width: 320px; background: var(--canvas); scroll-behavior: smooth; }
 body { margin: 0; color: var(--ink); background: var(--canvas); font-size: 14px; line-height: 1.5; }
 button, input, select, textarea { font: inherit; }
