@@ -704,6 +704,21 @@
     async function loadClassDirectory() {
         const directory = await request('/api/admin/class-options');
         classes = directory.grades || [];
+        const list = byId('class-options-list');
+        if (list) {
+            const activeGrades = classes.filter(grade => grade.isActive);
+            list.innerHTML = activeGrades.length
+                ? `<div class="class-import-example" role="table" aria-label="Active class options">
+                    <div role="row"><strong role="columnheader">Grade Level</strong><strong role="columnheader">Section</strong></div>
+                    ${activeGrades.map(grade => {
+                        const sections = grade.sections.filter(section => section.isActive);
+                        return sections.length
+                            ? sections.map(section => `<div role="row"><span role="cell">${escapeHtml(grade.name)}</span><span role="cell">${escapeHtml(section.name)}</span></div>`).join('')
+                            : `<div role="row"><span role="cell">${escapeHtml(grade.name)}</span><span role="cell">No active sections</span></div>`;
+                    }).join('')}
+                </div>`
+                : emptyState('No active class options', 'Import a workbook or create a grade level and section to make class options available.');
+        }
         await renderClassWorkspace();
         return classes;
     }
@@ -947,86 +962,18 @@
 
     function setupAdminActions() {
         byId('class-folder-form').addEventListener('submit', submitClassFolderDialog);
-        byId('class-workspace').addEventListener('click', event => {
-            const createGrade = event.target.closest('[data-create-grade]');
-            if (createGrade) {
+        document.querySelector('.class-management-actions')?.addEventListener('click', event => {
+            if (event.target.closest('[data-create-grade]')) {
                 openClassFolderDialog({ mode: 'create-grade', type: 'grade' });
                 return;
             }
-            const createSection = event.target.closest('[data-create-section]');
-            if (createSection) {
+            if (event.target.closest('[data-create-section]')) {
                 if (!classes.some(grade => grade.isActive)) {
                     showMessage('Create or restore a grade level before adding sections.', true);
                     return;
                 }
-                openClassFolderDialog({
-                    mode: 'create-section',
-                    type: 'section',
-                    gradeId: classViewGradeId
-                });
+                openClassFolderDialog({ mode: 'create-section', type: 'section' });
             }
-        });
-        byId('open-class-import').addEventListener('click', () => {
-            const details = byId('class-import-panel');
-            details.open = !details.open;
-            if (details.open) details.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
-        });
-        byId('class-import-panel').addEventListener('toggle', event => {
-            byId('open-class-import').setAttribute('aria-expanded', String(event.currentTarget.open));
-        });
-        byId('class-workspace-breadcrumb').addEventListener('click', event => {
-            if (!event.target.closest('[data-class-root]')) return;
-            classViewGradeId = null;
-            showArchivedClassGrades = false;
-            showArchivedClassSections = false;
-            loadClassDirectory().catch(error => showMessage(error.message, true));
-        });
-        byId('class-folder-workspace').addEventListener('click', event => {
-            const menuTrigger = event.target.closest('.folder-menu-trigger');
-            if (menuTrigger) {
-                const menu = menuTrigger.nextElementSibling;
-                const opening = menu.hidden;
-                byId('class-folder-workspace').querySelectorAll('.folder-action-menu').forEach(item => { item.hidden = true; });
-                byId('class-folder-workspace').querySelectorAll('.folder-menu-trigger').forEach(item => item.setAttribute('aria-expanded', 'false'));
-                menu.hidden = !opening;
-                menuTrigger.setAttribute('aria-expanded', String(opening));
-                return;
-            }
-            const archivedToggle = event.target.closest('[data-class-toggle-archived]');
-            if (archivedToggle) {
-                if (archivedToggle.dataset.classToggleArchived === 'grades') {
-                    showArchivedClassGrades = !showArchivedClassGrades;
-                    loadClassDirectory().catch(error => showMessage(error.message, true));
-                } else {
-                    showArchivedClassSections = !showArchivedClassSections;
-                    renderClassWorkspace().catch(error => showMessage(error.message, true));
-                }
-                return;
-            }
-            const manageButton = event.target.closest('[data-folder-manage]');
-            if (manageButton) {
-                prepareFolderManagement(manageButton).catch(error => showMessage(error.message, true));
-                return;
-            }
-            const openFolder = event.target.closest('[data-class-open]');
-            if (openFolder) {
-                if (openFolder.dataset.classOpen === 'grade') {
-                    classViewGradeId = Number(openFolder.dataset.folderId);
-                    showArchivedClassSections = false;
-                    renderClassWorkspace().catch(error => showMessage(error.message, true));
-                } else {
-                    const gradeId = Number(openFolder.dataset.gradeId);
-                    const sectionId = Number(openFolder.dataset.folderId);
-                    showAdminPanel('reports').then(async () => {
-                        activeGradeId = gradeId;
-                        activeSectionId = sectionId;
-                        await loadSectionReports();
-                    }).catch(error => showMessage(error.message, true));
-                }
-                return;
-            }
-            if (event.target.closest('[data-class-unassigned]'))
-                showAdminPanel('reports').catch(error => showMessage(error.message, true));
         });
         document.querySelectorAll('[data-view]').forEach(button => button.addEventListener('click', () => {
             showAdminPanel(button.dataset.view).catch(error => showMessage(error.message, true));
