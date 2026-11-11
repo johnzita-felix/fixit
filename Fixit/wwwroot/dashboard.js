@@ -341,12 +341,15 @@
 
     function classWorkspaceEmpty(title, description, action = 'grade') {
         const gradeEmpty = action === 'grade';
+        const eyebrow = action === null
+            ? 'CLASS RECORDS'
+            : gradeEmpty ? 'START WITH A GRADE LEVEL' : 'THIS GRADE IS READY FOR SECTIONS';
         return `<div class="class-folder-empty">
             <div class="class-empty-art" aria-hidden="true"><span class="class-empty-sheet"></span><span class="class-empty-folder">${folderIconSvg()}</span></div>
-            <p class="eyebrow">${gradeEmpty ? 'START WITH A GRADE LEVEL' : 'THIS GRADE IS READY FOR SECTIONS'}</p>
+            <p class="eyebrow">${eyebrow}</p>
             <h2>${escapeHtml(title)}</h2>
             <p>${escapeHtml(description)}</p>
-            <button type="button" class="button button-primary" ${gradeEmpty ? 'data-create-grade' : 'data-create-section'}><span aria-hidden="true">＋</span> ${gradeEmpty ? 'Add Grade Level' : 'Add Section'}</button>
+            ${action ? `<button type="button" class="button button-primary" ${gradeEmpty ? 'data-create-grade' : 'data-create-section'}><span aria-hidden="true">＋</span> ${gradeEmpty ? 'Add Grade Level' : 'Add Section'}</button>` : ''}
         </div>`;
     }
 
@@ -357,7 +360,7 @@
         const lede = byId('class-workspace-lede');
         const summary = byId('class-workspace-summary');
         const grade = classes.find(item => item.id === classViewGradeId) || null;
-        byId('add-class-section').hidden = !grade;
+        byId('add-class-section').hidden = !grade || !grade.isActive;
         document.querySelectorAll('.class-workspace-actions [data-create-grade]').forEach(button => { button.hidden = Boolean(grade); });
         if (!grade) {
             renderClassWorkspaceBreadcrumb(null);
@@ -394,7 +397,7 @@
                     : classWorkspaceEmpty(
                         showArchivedClassGrades ? 'No archived grade levels' : 'No grade levels yet',
                         showArchivedClassGrades ? 'Archived grade levels will appear here.' : 'Create the first grade-level folder, or import the school’s class list.',
-                        'grade')}
+                        showArchivedClassGrades ? null : 'grade')}
                 ${!showArchivedClassGrades && unassigned.length ? `<button type="button" class="class-unassigned-link" data-class-unassigned>Review ${unassigned.length} unassigned ${unassigned.length === 1 ? 'report' : 'reports'} <span aria-hidden="true">→</span></button>` : ''}`;
             return;
         }
@@ -428,7 +431,7 @@
                 : classWorkspaceEmpty(
                     showArchivedClassSections ? 'No archived sections' : 'No sections in this grade yet',
                     showArchivedClassSections ? 'Archived sections will appear here.' : 'Add a section to complete this grade-level folder.',
-                    'section')}
+                    showArchivedClassSections || !grade.isActive ? null : 'section')}
             ${!grade.isActive ? '<p class="archived-parent-note">This grade level is archived. Student dropdowns exclude it, but its sections and report history remain available.</p>' : ''}`;
     }
 
@@ -962,17 +965,88 @@
 
     function setupAdminActions() {
         byId('class-folder-form').addEventListener('submit', submitClassFolderDialog);
-        document.querySelector('.class-management-actions')?.addEventListener('click', event => {
-            if (event.target.closest('[data-create-grade]')) {
+        byId('class-workspace').addEventListener('click', event => {
+            const createGrade = event.target.closest('[data-create-grade]');
+            if (createGrade) {
                 openClassFolderDialog({ mode: 'create-grade', type: 'grade' });
                 return;
             }
-            if (event.target.closest('[data-create-section]')) {
+            const createSection = event.target.closest('[data-create-section]');
+            if (createSection) {
                 if (!classes.some(grade => grade.isActive)) {
                     showMessage('Create or restore a grade level before adding sections.', true);
                     return;
                 }
-                openClassFolderDialog({ mode: 'create-section', type: 'section' });
+                openClassFolderDialog({
+                    mode: 'create-section',
+                    type: 'section',
+                    gradeId: classViewGradeId
+                });
+            }
+        });
+        byId('open-class-import').addEventListener('click', () => {
+            const panel = byId('class-import-panel');
+            panel.open = !panel.open;
+            if (panel.open) panel.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+        });
+        byId('class-import-panel').addEventListener('toggle', event => {
+            byId('open-class-import').setAttribute('aria-expanded', String(event.currentTarget.open));
+        });
+        byId('class-workspace-breadcrumb').addEventListener('click', event => {
+            if (!event.target.closest('[data-class-root]')) return;
+            classViewGradeId = null;
+            showArchivedClassGrades = false;
+            showArchivedClassSections = false;
+            loadClassDirectory().catch(error => showMessage(error.message, true));
+        });
+        byId('class-folder-workspace').addEventListener('click', event => {
+            const menuTrigger = event.target.closest('.folder-menu-trigger');
+            if (menuTrigger) {
+                const menu = menuTrigger.nextElementSibling;
+                const opening = menu.hidden;
+                const workspace = byId('class-folder-workspace');
+                workspace.querySelectorAll('.folder-action-menu').forEach(item => { item.hidden = true; });
+                workspace.querySelectorAll('.folder-menu-trigger').forEach(item => item.setAttribute('aria-expanded', 'false'));
+                menu.hidden = !opening;
+                menuTrigger.setAttribute('aria-expanded', String(opening));
+                return;
+            }
+            const archivedToggle = event.target.closest('[data-class-toggle-archived]');
+            if (archivedToggle) {
+                if (archivedToggle.dataset.classToggleArchived === 'grades') {
+                    showArchivedClassGrades = !showArchivedClassGrades;
+                    loadClassDirectory().catch(error => showMessage(error.message, true));
+                } else {
+                    showArchivedClassSections = !showArchivedClassSections;
+                    renderClassWorkspace().catch(error => showMessage(error.message, true));
+                }
+                return;
+            }
+            const manageButton = event.target.closest('[data-folder-manage]');
+            if (manageButton) {
+                prepareFolderManagement(manageButton).catch(error => showMessage(error.message, true));
+                return;
+            }
+            const folder = event.target.closest('[data-class-open]');
+            if (folder) {
+                if (folder.dataset.classOpen === 'grade') {
+                    classViewGradeId = Number(folder.dataset.folderId);
+                    showArchivedClassSections = false;
+                    renderClassWorkspace().catch(error => showMessage(error.message, true));
+                } else {
+                    const gradeId = Number(folder.dataset.gradeId);
+                    const sectionId = Number(folder.dataset.folderId);
+                    showAdminPanel('reports').then(async () => {
+                        activeGradeId = gradeId;
+                        activeSectionId = sectionId;
+                        await loadSectionReports();
+                    }).catch(error => showMessage(error.message, true));
+                }
+                return;
+            }
+            if (event.target.closest('[data-class-unassigned]')) {
+                showAdminPanel('reports').then(() => loadUnassignedReports())
+                    .catch(error => showMessage(error.message, true));
             }
         });
         document.querySelectorAll('[data-view]').forEach(button => button.addEventListener('click', () => {

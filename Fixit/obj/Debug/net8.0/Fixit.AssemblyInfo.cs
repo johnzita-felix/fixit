@@ -14,7 +14,7 @@ using System.Reflection;
 [assembly: System.Reflection.AssemblyCompanyAttribute("Fixit")]
 [assembly: System.Reflection.AssemblyConfigurationAttribute("Debug")]
 [assembly: System.Reflection.AssemblyFileVersionAttribute("1.0.0.0")]
-[assembly: System.Reflection.AssemblyInformationalVersionAttribute("1.0.0+b6cb41da8ffe6ea04cabc3039d77f848c6e13e95")]
+[assembly: System.Reflection.AssemblyInformationalVersionAttribute("1.0.0+e79482d623e7ca7ba8d576e85f47a88caa3d9e24")]
 [assembly: System.Reflection.AssemblyProductAttribute("Fixit")]
 [assembly: System.Reflection.AssemblyTitleAttribute("Fixit")]
 [assembly: System.Reflection.AssemblyVersionAttribute("1.0.0.0")]
