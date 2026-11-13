@@ -1,0 +1,33 @@
+@baseUrl = https://localhost:7100
+@registrationEmail = student@example.edu
+@verificationCode = 000000
+
+### Start registration and send a verification email (does not create an account)
+POST {{baseUrl}}/api/register
+Content-Type: application/json
+
+{
+  "username": "Test Student",
+  "email": "{{registrationEmail}}",
+  "password": "ChangeThisPassword123!",
+  "confirmPassword": "ChangeThisPassword123!",
+  "gradeLevelId": null,
+  "sectionId": null
+}
+
+### Resend the registration verification code after the cooldown
+POST {{baseUrl}}/api/register/resend-code
+Content-Type: application/json
+
+{
+  "email": "{{registrationEmail}}"
+}
+
+### Verify the code received by email and create the account
+POST {{baseUrl}}/api/register/verify
+Content-Type: application/json
+
+{
+  "email": "{{registrationEmail}}",
+  "code": "{{verificationCode}}"
+}

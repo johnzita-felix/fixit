@@ -143,3 +143,19 @@ C:\Users\LMI\Desktop\Grade 12\Sagittarius\vscode\fixit\Fixit\bin\verify\runtimes
 C:\Users\LMI\Desktop\Grade 12\Sagittarius\vscode\fixit\Fixit\bin\verify\runtimes\win-arm64\native\e_sqlite3.dll
 C:\Users\LMI\Desktop\Grade 12\Sagittarius\vscode\fixit\Fixit\bin\verify\runtimes\win-x64\native\e_sqlite3.dll
 C:\Users\LMI\Desktop\Grade 12\Sagittarius\vscode\fixit\Fixit\bin\verify\runtimes\win-x86\native\e_sqlite3.dll
+C:\Users\LMI\.copilot\session-state\d13087c7-9bec-4c15-bed2-f02ba4115e05\files\registration-build\appsettings.Development.json
+C:\Users\LMI\.copilot\session-state\d13087c7-9bec-4c15-bed2-f02ba4115e05\files\registration-build\appsettings.json
+C:\Users\LMI\.copilot\session-state\d13087c7-9bec-4c15-bed2-f02ba4115e05\files\registration-build\Fixit.staticwebassets.runtime.json
+C:\Users\LMI\.copilot\session-state\d13087c7-9bec-4c15-bed2-f02ba4115e05\files\registration-build\Fixit.staticwebassets.endpoints.json
+C:\Users\LMI\.copilot\session-state\d13087c7-9bec-4c15-bed2-f02ba4115e05\files\registration-build\Fixit.deps.json
+C:\Users\LMI\.copilot\session-state\d13087c7-9bec-4c15-bed2-f02ba4115e05\files\registration-build\Fixit.runtimeconfig.json
+C:\Users\LMI\.copilot\session-state\d13087c7-9bec-4c15-bed2-f02ba4115e05\files\registration-build\Fixit.dll
+C:\Users\LMI\.copilot\session-state\d13087c7-9bec-4c15-bed2-f02ba4115e05\files\registration-build\Fixit.pdb
+C:\Users\LMI\.copilot\session-state\d13087c7-9bec-4c15-bed2-f02ba4115e05\files\registration-build-final\appsettings.Development.json
+C:\Users\LMI\.copilot\session-state\d13087c7-9bec-4c15-bed2-f02ba4115e05\files\registration-build-final\appsettings.json
+C:\Users\LMI\.copilot\session-state\d13087c7-9bec-4c15-bed2-f02ba4115e05\files\registration-build-final\Fixit.staticwebassets.runtime.json
+C:\Users\LMI\.copilot\session-state\d13087c7-9bec-4c15-bed2-f02ba4115e05\files\registration-build-final\Fixit.staticwebassets.endpoints.json
+C:\Users\LMI\.copilot\session-state\d13087c7-9bec-4c15-bed2-f02ba4115e05\files\registration-build-final\Fixit.deps.json
+C:\Users\LMI\.copilot\session-state\d13087c7-9bec-4c15-bed2-f02ba4115e05\files\registration-build-final\Fixit.runtimeconfig.json
+C:\Users\LMI\.copilot\session-state\d13087c7-9bec-4c15-bed2-f02ba4115e05\files\registration-build-final\Fixit.dll
+C:\Users\LMI\.copilot\session-state\d13087c7-9bec-4c15-bed2-f02ba4115e05\files\registration-build-final\Fixit.pdb

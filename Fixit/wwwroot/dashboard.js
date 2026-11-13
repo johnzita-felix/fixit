@@ -965,89 +965,19 @@
 
     function setupAdminActions() {
         byId('class-folder-form').addEventListener('submit', submitClassFolderDialog);
-        byId('class-workspace').addEventListener('click', event => {
+        document.querySelector('.class-management-actions')?.addEventListener('click', event => {
             const createGrade = event.target.closest('[data-create-grade]');
             if (createGrade) {
                 openClassFolderDialog({ mode: 'create-grade', type: 'grade' });
                 return;
             }
             const createSection = event.target.closest('[data-create-section]');
-            if (createSection) {
-                if (!classes.some(grade => grade.isActive)) {
-                    showMessage('Create or restore a grade level before adding sections.', true);
-                    return;
-                }
-                openClassFolderDialog({
-                    mode: 'create-section',
-                    type: 'section',
-                    gradeId: classViewGradeId
-                });
-            }
-        });
-        byId('open-class-import').addEventListener('click', () => {
-            const panel = byId('class-import-panel');
-            panel.open = !panel.open;
-            if (panel.open) panel.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
-        });
-        byId('class-import-panel').addEventListener('toggle', event => {
-            byId('open-class-import').setAttribute('aria-expanded', String(event.currentTarget.open));
-        });
-        byId('class-workspace-breadcrumb').addEventListener('click', event => {
-            if (!event.target.closest('[data-class-root]')) return;
-            classViewGradeId = null;
-            showArchivedClassGrades = false;
-            showArchivedClassSections = false;
-            loadClassDirectory().catch(error => showMessage(error.message, true));
-        });
-        byId('class-folder-workspace').addEventListener('click', event => {
-            const menuTrigger = event.target.closest('.folder-menu-trigger');
-            if (menuTrigger) {
-                const menu = menuTrigger.nextElementSibling;
-                const opening = menu.hidden;
-                const workspace = byId('class-folder-workspace');
-                workspace.querySelectorAll('.folder-action-menu').forEach(item => { item.hidden = true; });
-                workspace.querySelectorAll('.folder-menu-trigger').forEach(item => item.setAttribute('aria-expanded', 'false'));
-                menu.hidden = !opening;
-                menuTrigger.setAttribute('aria-expanded', String(opening));
+            if (!createSection) return;
+            if (!classes.some(grade => grade.isActive)) {
+                showMessage('Create or restore a grade level before adding sections.', true);
                 return;
             }
-            const archivedToggle = event.target.closest('[data-class-toggle-archived]');
-            if (archivedToggle) {
-                if (archivedToggle.dataset.classToggleArchived === 'grades') {
-                    showArchivedClassGrades = !showArchivedClassGrades;
-                    loadClassDirectory().catch(error => showMessage(error.message, true));
-                } else {
-                    showArchivedClassSections = !showArchivedClassSections;
-                    renderClassWorkspace().catch(error => showMessage(error.message, true));
-                }
-                return;
-            }
-            const manageButton = event.target.closest('[data-folder-manage]');
-            if (manageButton) {
-                prepareFolderManagement(manageButton).catch(error => showMessage(error.message, true));
-                return;
-            }
-            const folder = event.target.closest('[data-class-open]');
-            if (folder) {
-                if (folder.dataset.classOpen === 'grade') {
-                    classViewGradeId = Number(folder.dataset.folderId);
-                    showArchivedClassSections = false;
-                    renderClassWorkspace().catch(error => showMessage(error.message, true));
-                } else {
-                    const gradeId = Number(folder.dataset.gradeId);
-                    const sectionId = Number(folder.dataset.folderId);
-                    showAdminPanel('reports').then(async () => {
-                        activeGradeId = gradeId;
-                        activeSectionId = sectionId;
-                        await loadSectionReports();
-                    }).catch(error => showMessage(error.message, true));
-                }
-                return;
-            }
-            if (event.target.closest('[data-class-unassigned]')) {
-                showAdminPanel('reports').then(() => loadUnassignedReports())
-                    .catch(error => showMessage(error.message, true));
-            }
+            openClassFolderDialog({ mode: 'create-section', type: 'section' });
         });
         document.querySelectorAll('[data-view]').forEach(button => button.addEventListener('click', () => {
             showAdminPanel(button.dataset.view).catch(error => showMessage(error.message, true));

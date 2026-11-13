@@ -7,6 +7,7 @@
     <meta name="description" content="Create your fixIt school maintenance tracker account.">
     <title>Create an account | fixIt</title>
     <link rel="stylesheet" href="app.css?v=20261110-1">
+    <link rel="stylesheet" href="register.css?v=20261113-1">
     <style>
         .registerpw .input-wrap,
         .register-field .input-wrap { gap: 8px; }
@@ -131,10 +132,41 @@
                         <span>Create account</span>
                         <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12h14m-6-6 6 6-6 6"/></svg>
                     </button>
-                    <p id="form-message" role="status" aria-live="polite"></p>
                 </form>
 
-                <div class="signup-prompt">
+                <form id="registration-verification-form" class="login-form" method="post" hidden>
+                    <p class="verification-destination">We sent a six-digit code to <strong id="verification-email"></strong>.</p>
+                    <label for="registration-code">Six-digit verification code</label>
+                    <div class="input-wrap">
+                        <svg viewBox="0 0 24 24" aria-hidden="true">
+                            <rect x="3.5" y="5.5" width="17" height="13" rx="2.5"/>
+                            <path d="M7.5 10h.01M12 10h.01M16.5 10h.01M8 14.5h8"/>
+                        </svg>
+                        <input type="text" id="registration-code" name="code" inputmode="numeric" autocomplete="one-time-code" pattern="[0-9]{6}" maxlength="6" placeholder="000000" required>
+                    </div>
+                    <p id="verification-countdown" class="verification-countdown" aria-live="polite"></p>
+                    <button class="submit-button" id="verify-registration-button" type="submit">
+                        <span>Verify email</span>
+                        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12h14m-6-6 6 6-6 6"/></svg>
+                    </button>
+                    <div class="registration-verification-actions">
+                        <button class="text-link" id="resend-registration-code" type="button">Resend code</button>
+                        <button class="text-link" id="back-to-registration" type="button">← Back to registration</button>
+                    </div>
+                </form>
+
+                <section id="registration-success" class="registration-success" aria-live="polite" hidden>
+                    <p class="form-eyebrow">EMAIL VERIFIED</p>
+                    <h3>Account created.</h3>
+                    <p id="registration-success-message">Your account is ready. Sign in to continue.</p>
+                    <a class="submit-button" href="index.html">
+                        <span>Go to sign in</span>
+                        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12h14m-6-6 6 6-6 6"/></svg>
+                    </a>
+                </section>
+
+                <p id="form-message" role="status" aria-live="polite"></p>
+                <div class="signup-prompt" id="signup-prompt">
                     <span>Already have an account?</span>
                     <a class="text-link" href="index.html">Sign in <span aria-hidden="true">↗</span></a>
                 </div>
@@ -143,9 +175,25 @@
     </main>
 <script>
 let registerClasses = [];
+let pendingEmail = '';
+let codeExpiresAt = 0;
+let resendAvailableAt = 0;
+let verificationTimer;
 const gradeSelect = document.getElementById('register-grade');
 const sectionSelect = document.getElementById('register-section');
 const classHelp = document.getElementById('class-help');
+const registerForm = document.getElementById('register-form');
+const verificationForm = document.getElementById('registration-verification-form');
+const verificationCode = document.getElementById('registration-code');
+const verificationMessage = document.getElementById('form-message');
+const verificationButton = document.getElementById('verify-registration-button');
+const resendButton = document.getElementById('resend-registration-code');
+const submitButton = document.getElementById('registerButton');
+const countdown = document.getElementById('verification-countdown');
+const showMessage = (text, kind = '') => {
+  verificationMessage.className = kind;
+  verificationMessage.textContent = text;
+};
 const escapeOption = value => String(value).replace(/[&<>"']/g, character => ({
   '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'
 })[character]);
@@ -194,45 +242,161 @@ document.querySelectorAll('.password-toggle').forEach((toggle) => {
   });
 });
 
-document.getElementById('register-form').addEventListener('submit', async (event) => {
+function updateVerificationCountdown() {
+  const now = Date.now();
+  const expiresIn = Math.max(0, Math.ceil((codeExpiresAt - now) / 1000));
+  const resendIn = Math.max(0, Math.ceil((resendAvailableAt - now) / 1000));
+  const expiryText = expiresIn
+    ? `Code expires in ${Math.floor(expiresIn / 60)}:${String(expiresIn % 60).padStart(2, '0')}.`
+    : 'This code may have expired. Request a new one.';
+  countdown.textContent = resendIn
+    ? `${expiryText} Resend available in ${resendIn}s.`
+    : `${expiryText} You can request another code now.`;
+  resendButton.disabled = resendIn > 0;
+  resendButton.textContent = resendIn > 0 ? `Resend code in ${resendIn}s` : 'Resend code';
+}
+
+function showVerificationStage(email, responseData) {
+  pendingEmail = email;
+  registerForm.hidden = true;
+  verificationForm.hidden = false;
+  document.getElementById('verification-email').textContent = email;
+  verificationCode.value = '';
+  codeExpiresAt = Date.now() + (responseData.expiresInSeconds || 600) * 1000;
+  resendAvailableAt = Date.now() + (responseData.resendAfterSeconds || 60) * 1000;
+  updateVerificationCountdown();
+  window.clearInterval(verificationTimer);
+  verificationTimer = window.setInterval(updateVerificationCountdown, 1000);
+  showMessage(responseData.message || 'Enter the verification code sent to your email.', 'info');
+  verificationCode.focus();
+}
+
+registerForm.addEventListener('submit', async (event) => {
   event.preventDefault();
-  const message = document.getElementById('form-message');
-  const button = document.getElementById('registerButton');
-  const classDeferred = event.submitter?.id === 'register-later';
-  if (!classDeferred && Boolean(gradeSelect.value) !== Boolean(sectionSelect.value)) {
-    message.className = 'error';
-    message.textContent = 'Choose both a grade level and section, or select Set Up Later.';
+  const email = document.getElementById('email').value.trim();
+  if (Boolean(gradeSelect.value) !== Boolean(sectionSelect.value)) {
+    showMessage('Choose both a grade level and section, or leave both unselected.', 'error');
     return;
   }
-  button.disabled = true;
-  document.getElementById('register-later').disabled = true;
-  message.className = '';
-  message.textContent = 'Creating account…';
+  if (document.getElementById('password').value !== document.getElementById('confirmPassword').value) {
+    showMessage('Passwords do not match.', 'error');
+    return;
+  }
+  submitButton.disabled = true;
+  submitButton.querySelector('span').textContent = 'Sending code…';
+  showMessage('Validating your details and sending a verification code…', 'info');
   try {
     const response = await fetch('/api/register', {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
         username: document.getElementById('reguser').value,
-        email: document.getElementById('email').value,
+        email,
         password: document.getElementById('password').value,
         confirmPassword: document.getElementById('confirmPassword').value,
-        gradeLevelId: !classDeferred && gradeSelect.value ? Number(gradeSelect.value) : null,
-        sectionId: !classDeferred && sectionSelect.value ? Number(sectionSelect.value) : null
+        gradeLevelId: gradeSelect.value ? Number(gradeSelect.value) : null,
+        sectionId: sectionSelect.value ? Number(sectionSelect.value) : null
       })
     });
-    const data = await response.json();
-    message.className = response.ok ? 'success' : 'error';
-    message.textContent = data.message || 'Unable to create account.';
-    if (response.ok) setTimeout(() => window.location.href = '/index.html', 900);
+    const data = await response.json().catch(() => ({}));
+    if (!response.ok) {
+      if (response.status === 429 && pendingEmail.toLowerCase() === email.toLowerCase()) {
+        registerForm.hidden = true;
+        verificationForm.hidden = false;
+        document.getElementById('verification-email').textContent = email;
+        updateVerificationCountdown();
+      }
+      showMessage(data.detail || data.message || 'Unable to start registration. Please try again.', 'error');
+      return;
+    }
+    showVerificationStage(email, data);
   } catch {
-    message.className = 'error';
-    message.textContent = 'Could not connect to the server. Make sure the app is running.';
+    showMessage('Could not connect to the server. Make sure the app is running.', 'error');
   }
   finally {
-    button.disabled = false;
-    document.getElementById('register-later').disabled = false;
+    submitButton.disabled = false;
+    submitButton.querySelector('span').textContent = 'Create account';
   }
 });
+
+verificationForm.addEventListener('submit', async (event) => {
+  event.preventDefault();
+  verificationButton.disabled = true;
+  verificationButton.querySelector('span').textContent = 'Verifying…';
+  showMessage('Checking your verification code…', 'info');
+  try {
+    const response = await fetch('/api/register/verify', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ email: pendingEmail, code: verificationCode.value.trim() })
+    });
+    const data = await response.json().catch(() => ({}));
+    if (!response.ok) {
+      showMessage(data.detail || data.message || 'We could not verify that code. Please try again.', 'error');
+      if (data.message && data.message.includes('expired')) {
+        codeExpiresAt = Date.now();
+        updateVerificationCountdown();
+      }
+      return;
+    }
+    window.clearInterval(verificationTimer);
+    verificationForm.hidden = true;
+    document.getElementById('registration-success').hidden = false;
+    document.getElementById('signup-prompt').hidden = true;
+    registerForm.reset();
+    document.getElementById('registration-success-message').textContent =
+      data.message || 'Your account is ready. Sign in to continue.';
+    showMessage('Registration complete.', 'success');
+  } catch {
+    showMessage('Could not connect to the server. Make sure the app is running.', 'error');
+  } finally {
+    verificationButton.disabled = false;
+    verificationButton.querySelector('span').textContent = 'Verify email';
+  }
+});
+
+resendButton.addEventListener('click', async () => {
+  if (resendButton.disabled || !pendingEmail) return;
+  resendButton.disabled = true;
+  resendButton.textContent = 'Sending…';
+  showMessage('Sending a new verification code…', 'info');
+  try {
+    const response = await fetch('/api/register/resend-code', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ email: pendingEmail })
+    });
+    const data = await response.json().catch(() => ({}));
+    if (!response.ok) {
+      if (data.resendAfterSeconds) {
+        resendAvailableAt = Date.now() + data.resendAfterSeconds * 1000;
+        updateVerificationCountdown();
+      }
+      showMessage(data.detail || data.message || 'We could not resend the code. Please try again.', 'error');
+      return;
+    }
+    codeExpiresAt = Date.now() + (data.expiresInSeconds || 600) * 1000;
+    resendAvailableAt = Date.now() + (data.resendAfterSeconds || 60) * 1000;
+    verificationCode.value = '';
+    updateVerificationCountdown();
+    showMessage(data.message || 'A new verification code was sent.', 'info');
+  } catch {
+    showMessage('Could not connect to the server. Make sure the app is running.', 'error');
+  } finally {
+    updateVerificationCountdown();
+  }
+});
+
+document.getElementById('back-to-registration').addEventListener('click', () => {
+  verificationForm.hidden = true;
+  registerForm.hidden = false;
+  showMessage('', '');
+  document.getElementById('reguser').focus();
+});
+
+verificationCode.addEventListener('input', () => {
+  verificationCode.value = verificationCode.value.replace(/\D/g, '').slice(0, 6);
+});
+
 loadRegisterClasses();
 </script>
 </body>

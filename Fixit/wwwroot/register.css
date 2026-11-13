@@ -20,6 +20,71 @@
     margin-top: 21px;
 }
 
+.register-card .login-form[hidden],
+.register-card .registration-success[hidden] {
+    display: none !important;
+}
+
+.verification-destination {
+    margin: 0 0 8px;
+    color: #778594;
+    font-size: 12px;
+    line-height: 1.6;
+}
+
+.verification-destination strong {
+    color: #514846;
+    overflow-wrap: anywhere;
+}
+
+.verification-countdown {
+    margin: 2px 0 0;
+    color: #778594;
+    font-size: 11px;
+    line-height: 1.5;
+}
+
+.registration-verification-actions {
+    display: flex;
+    justify-content: space-between;
+    gap: 16px;
+    margin-top: 8px;
+}
+
+.registration-verification-actions .text-link {
+    padding: 0;
+    border: 0;
+    background: transparent;
+    cursor: pointer;
+    font: inherit;
+}
+
+.registration-verification-actions .text-link:disabled {
+    color: #a09895;
+    cursor: wait;
+    text-decoration: none;
+}
+
+.registration-success h3 {
+    margin: 0 0 8px;
+    color: #292323;
+    font-family: Georgia, "Times New Roman", serif;
+    font-size: 28px;
+    font-weight: 500;
+}
+
+.registration-success > p:last-of-type {
+    margin: 0;
+    color: #778594;
+    font-size: 12px;
+    line-height: 1.6;
+}
+
+.registration-success .submit-button {
+    margin-top: 20px;
+    text-decoration: none;
+}
+
 @media (max-width: 700px) {
     .register-card {
         padding-top: 31px;

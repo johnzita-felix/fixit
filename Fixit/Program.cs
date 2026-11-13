@@ -115,7 +115,9 @@ app.UseAuthorization();
 app.MapPost("/api/register", async (
     RegisterRequest request,
     AppDbContext db,
-    IPasswordHasher<AppUser> hasher) =>
+    IPasswordHasher<AppUser> hasher,
+    IConfiguration config,
+    CancellationToken cancellationToken) =>
 {
     var username = request.Username?.Trim();
     var email = NormalizeEmail(request.Email);
@@ -138,44 +140,262 @@ app.MapPost("/api/register", async (
     if (password != request.ConfirmPassword)
         return Results.BadRequest(new { message = "Passwords do not match." });
 
+    var smtp = SmtpSettings.FromConfiguration(config);
+    if (!smtp.IsConfigured)
+    {
+        return Results.Problem(
+            title: "Email verification is not configured",
+            detail: "The server administrator must configure SMTP email settings before registration can be completed.",
+            statusCode: StatusCodes.Status503ServiceUnavailable);
+    }
+
     var hasClassChoice = request.GradeLevelId is not null || request.SectionId is not null;
     if (hasClassChoice &&
         (request.GradeLevelId is null ||
          request.SectionId is null ||
          !await db.SchoolSections.AnyAsync(section =>
-             section.Id == request.SectionId && section.GradeLevelId == request.GradeLevelId && section.IsActive) ||
+             section.Id == request.SectionId && section.GradeLevelId == request.GradeLevelId && section.IsActive, cancellationToken) ||
          !await db.SchoolGrades.AnyAsync(grade =>
-             grade.Id == request.GradeLevelId && grade.IsActive)))
+             grade.Id == request.GradeLevelId && grade.IsActive, cancellationToken)))
         return Results.BadRequest(new { message = "Choose a valid grade level and section from the school directory." });
 
-    if (await db.Users.AnyAsync(u => u.Username == username))
+    if (await db.Users.AnyAsync(u => u.Username == username, cancellationToken))
         return Results.Conflict(new { message = "That name is already registered. Try a different name." });
 
-    if (await db.Users.AnyAsync(u => u.Email == email))
+    if (await db.Users.AnyAsync(u => u.Email != null && u.Email.ToLower() == email, cancellationToken))
         return Results.Conflict(new { message = "An account with that email already exists." });
 
-    var user = new AppUser
+    var pending = await db.PendingRegistrations.SingleOrDefaultAsync(
+        item => item.Email == email, cancellationToken);
+    if (pending is not null && pending.CreatedUtc.AddSeconds(60) > DateTime.UtcNow)
     {
-        Username = username,
-        Email = email,
-        GradeLevelId = request.GradeLevelId,
-        SectionId = request.SectionId
-    };
-    user.PasswordHash = hasher.HashPassword(user, password);
-    db.Users.Add(user);
+        var retryAfter = Math.Max(1, (int)Math.Ceiling((pending.CreatedUtc.AddSeconds(60) - DateTime.UtcNow).TotalSeconds));
+        return Results.Json(new
+        {
+            message = "A code is already active for this email. Verify the current registration or wait before starting again.",
+            expiresInSeconds = Math.Max(0, (int)Math.Ceiling((pending.ExpiresUtc - DateTime.UtcNow).TotalSeconds)),
+            resendAfterSeconds = retryAfter
+        }, statusCode: StatusCodes.Status429TooManyRequests);
+    }
+
+    if (await db.PendingRegistrations.AnyAsync(
+            item => item.Email != email && item.Username == username, cancellationToken))
+        return Results.Conflict(new { message = "That name is being used by another pending registration." });
+
+    pending ??= new PendingRegistration { Email = email };
+    var passwordUser = new AppUser { Username = username, Email = email };
+    pending.Username = username;
+    pending.PasswordHash = hasher.HashPassword(passwordUser, password);
+    pending.GradeLevelId = request.GradeLevelId;
+    pending.SectionId = request.SectionId;
+    var code = SetRegistrationCode(pending, DateTime.UtcNow);
+    if (db.Entry(pending).State == EntityState.Detached)
+        db.PendingRegistrations.Add(pending);
 
     try
     {
-        await db.SaveChangesAsync();
+        await db.SaveChangesAsync(cancellationToken);
     }
     catch (DbUpdateException ex) when (ex.InnerException is SqliteException sqlite &&
                                         (sqlite.SqliteExtendedErrorCode == 2067 ||
                                          sqlite.SqliteExtendedErrorCode == 1555))
     {
+        return Results.Conflict(new { message = "That name or email is already being used by another registration." });
+    }
+
+    try
+    {
+        await SendRegistrationVerificationCodeEmailAsync(smtp, email, code, cancellationToken);
+    }
+    catch (SmtpException)
+    {
+        InvalidateRegistrationCode(pending);
+        pending.CreatedUtc = DateTime.UtcNow.AddSeconds(-60);
+        await db.SaveChangesAsync(cancellationToken);
+        app.Logger.LogError("Failed to deliver a registration verification email.");
+        return Results.Problem(
+            title: "Unable to send verification code",
+            detail: "Email delivery failed. Please try again later.",
+            statusCode: StatusCodes.Status503ServiceUnavailable);
+    }
+    catch (FormatException)
+    {
+        InvalidateRegistrationCode(pending);
+        pending.CreatedUtc = DateTime.UtcNow.AddSeconds(-60);
+        await db.SaveChangesAsync(cancellationToken);
+        app.Logger.LogError("Registration email delivery is misconfigured.");
+        return Results.Problem(
+            title: "Unable to send verification code",
+            detail: "Email delivery failed. Please contact support.",
+            statusCode: StatusCodes.Status503ServiceUnavailable);
+    }
+
+    return Results.Ok(new
+    {
+        message = "A six-digit verification code was sent to your email address.",
+        expiresInSeconds = 600,
+        resendAfterSeconds = 60
+    });
+}).RequireRateLimiting("auth");
+
+app.MapPost("/api/register/resend-code", async (
+    RegistrationEmailRequest request,
+    AppDbContext db,
+    IConfiguration config,
+    CancellationToken cancellationToken) =>
+{
+    var email = NormalizeEmail(request.Email);
+    if (string.IsNullOrWhiteSpace(email) || !IsValidEmail(email))
+        return Results.BadRequest(new { message = "Enter a valid email address." });
+
+    var pending = await db.PendingRegistrations.SingleOrDefaultAsync(
+        item => item.Email == email, cancellationToken);
+    if (pending is null)
+        return Results.BadRequest(new { message = "No pending registration was found. Return to the registration form and try again." });
+
+    var now = DateTime.UtcNow;
+    var retryAt = pending.CreatedUtc.AddSeconds(60);
+    if (retryAt > now)
+    {
+        var retryAfter = Math.Max(1, (int)Math.Ceiling((retryAt - now).TotalSeconds));
+        return Results.Json(new
+        {
+            message = $"Please wait {retryAfter} seconds before requesting another code.",
+            resendAfterSeconds = retryAfter
+        }, statusCode: StatusCodes.Status429TooManyRequests);
+    }
+
+    var smtp = SmtpSettings.FromConfiguration(config);
+    if (!smtp.IsConfigured)
+    {
+        return Results.Problem(
+            title: "Email verification is not configured",
+            detail: "The server administrator must configure SMTP email settings before registration can be completed.",
+            statusCode: StatusCodes.Status503ServiceUnavailable);
+    }
+
+    var code = SetRegistrationCode(pending, now);
+    await db.SaveChangesAsync(cancellationToken);
+
+    try
+    {
+        await SendRegistrationVerificationCodeEmailAsync(smtp, email, code, cancellationToken);
+    }
+    catch (SmtpException)
+    {
+        InvalidateRegistrationCode(pending);
+        pending.CreatedUtc = DateTime.UtcNow.AddSeconds(-60);
+        await db.SaveChangesAsync(cancellationToken);
+        app.Logger.LogError("Failed to deliver a resent registration verification email.");
+        return Results.Problem(
+            title: "Unable to send verification code",
+            detail: "Email delivery failed. Please try again later.",
+            statusCode: StatusCodes.Status503ServiceUnavailable);
+    }
+    catch (FormatException)
+    {
+        InvalidateRegistrationCode(pending);
+        pending.CreatedUtc = DateTime.UtcNow.AddSeconds(-60);
+        await db.SaveChangesAsync(cancellationToken);
+        app.Logger.LogError("Registration email delivery is misconfigured.");
+        return Results.Problem(
+            title: "Unable to send verification code",
+            detail: "Email delivery failed. Please contact support.",
+            statusCode: StatusCodes.Status503ServiceUnavailable);
+    }
+
+    return Results.Ok(new
+    {
+        message = "A new verification code was sent.",
+        expiresInSeconds = 600,
+        resendAfterSeconds = 60
+    });
+}).RequireRateLimiting("auth");
+
+app.MapPost("/api/register/verify", async (
+    VerifyRegistrationRequest request,
+    AppDbContext db,
+    CancellationToken cancellationToken) =>
+{
+    var email = NormalizeEmail(request.Email);
+    if (string.IsNullOrWhiteSpace(email) || !IsValidEmail(email) ||
+        request.Code is null || request.Code.Length != 6 ||
+        request.Code.Any(character => character is < '0' or > '9'))
+        return Results.BadRequest(new { message = "Enter the six-digit verification code sent to your email." });
+
+    await using var transaction = await db.Database.BeginTransactionAsync(cancellationToken);
+    var pending = await db.PendingRegistrations.SingleOrDefaultAsync(
+        item => item.Email == email, cancellationToken);
+    if (pending is null)
+        return Results.BadRequest(new { message = "That verification code is invalid or the registration is no longer available. Start again." });
+
+    if (pending.CodeHash is null || pending.CodeSalt is null)
+        return Results.BadRequest(new { message = "That verification code is invalid or has expired. Request a new code." });
+
+    if (pending.Attempts >= 5)
+        return Results.BadRequest(new { message = "Too many incorrect attempts. Request a new code." });
+
+    if (pending.ExpiresUtc <= DateTime.UtcNow)
+    {
+        InvalidateRegistrationCode(pending);
+        await db.SaveChangesAsync(cancellationToken);
+        await transaction.CommitAsync(cancellationToken);
+        return Results.BadRequest(new { message = "That verification code has expired. Request a new code." });
+    }
+
+    if (!CryptographicOperations.FixedTimeEquals(
+            pending.CodeHash,
+            HashVerificationCode(request.Code, pending.CodeSalt)))
+    {
+        pending.Attempts++;
+        if (pending.Attempts >= 5)
+            InvalidateRegistrationCode(pending);
+        await db.SaveChangesAsync(cancellationToken);
+        await transaction.CommitAsync(cancellationToken);
+        return Results.BadRequest(new
+        {
+            message = pending.Attempts >= 5
+                ? "Too many incorrect attempts. Request a new code."
+                : "That verification code is invalid. Check it and try again."
+        });
+    }
+
+    if (await db.Users.AnyAsync(
+            user => user.Email != null && user.Email.ToLower() == email, cancellationToken) ||
+        await db.Users.AnyAsync(user => user.Username == pending.Username, cancellationToken))
+    {
+        db.PendingRegistrations.Remove(pending);
+        await db.SaveChangesAsync(cancellationToken);
+        await transaction.CommitAsync(cancellationToken);
         return Results.Conflict(new { message = "That name or email is already registered." });
     }
 
-    return Results.Ok(new { message = "Account created! You can now sign in." });
+    var user = new AppUser
+    {
+        Username = pending.Username,
+        Email = pending.Email,
+        PasswordHash = pending.PasswordHash,
+        GradeLevelId = pending.GradeLevelId,
+        SectionId = pending.SectionId,
+        Role = "user"
+    };
+    db.Users.Add(user);
+    db.PendingRegistrations.Remove(pending);
+
+    try
+    {
+        await db.SaveChangesAsync(cancellationToken);
+        await transaction.CommitAsync(cancellationToken);
+    }
+    catch (DbUpdateException ex) when (ex.InnerException is SqliteException sqlite &&
+                                        (sqlite.SqliteExtendedErrorCode == 2067 ||
+                                         sqlite.SqliteExtendedErrorCode == 1555))
+    {
+        await transaction.RollbackAsync(cancellationToken);
+        return Results.Conflict(new { message = "That name or email is already registered." });
+    }
+
+    return Results.Ok(new { message = "Email verified and account created. You can now sign in." });
 }).RequireRateLimiting("auth");
 
 app.MapPost("/api/login", async (
@@ -1368,6 +1588,25 @@ static bool IsValidEmail(string email)
 static byte[] HashVerificationCode(string code, byte[] salt) =>
     Rfc2898DeriveBytes.Pbkdf2(code, salt, 210_000, HashAlgorithmName.SHA256, 32);
 
+static string SetRegistrationCode(PendingRegistration pending, DateTime now)
+{
+    var code = RandomNumberGenerator.GetInt32(0, 1_000_000).ToString("D6");
+    var salt = RandomNumberGenerator.GetBytes(16);
+    pending.CodeHash = HashVerificationCode(code, salt);
+    pending.CodeSalt = salt;
+    pending.CreatedUtc = now;
+    pending.ExpiresUtc = now.AddMinutes(10);
+    pending.Attempts = 0;
+    return code;
+}
+
+static void InvalidateRegistrationCode(PendingRegistration pending)
+{
+    pending.CodeHash = null;
+    pending.CodeSalt = null;
+    pending.ExpiresUtc = DateTime.UtcNow;
+}
+
 static async Task<List<GradeDirectoryResponse>> GetClassDirectoryAsync(AppDbContext db)
 {
     var grades = await db.SchoolGrades.AsNoTracking()
@@ -1895,6 +2134,20 @@ static async Task EnsureAuthColumnsAsync(AppDbContext db)
                     "ResetGrantExpiresUtc" TEXT NULL,
                     "UsedUtc" TEXT NULL
                 );
+                CREATE TABLE IF NOT EXISTS "PendingRegistrations" (
+                    "Email" TEXT NOT NULL CONSTRAINT "PK_PendingRegistrations" PRIMARY KEY,
+                    "Username" TEXT NOT NULL,
+                    "PasswordHash" TEXT NOT NULL,
+                    "GradeLevelId" INTEGER NULL,
+                    "SectionId" INTEGER NULL,
+                    "CodeHash" BLOB NULL,
+                    "CodeSalt" BLOB NULL,
+                    "ExpiresUtc" TEXT NOT NULL,
+                    "CreatedUtc" TEXT NOT NULL,
+                    "Attempts" INTEGER NOT NULL
+                );
+                CREATE UNIQUE INDEX IF NOT EXISTS "IX_PendingRegistrations_Username"
+                    ON "PendingRegistrations" ("Username");
                 """;
             await command.ExecuteNonQueryAsync();
         }
@@ -1930,7 +2183,34 @@ static async Task SendVerificationCodeEmailAsync(SmtpSettings settings, string t
     await client.SendMailAsync(message);
 }
 
+static async Task SendRegistrationVerificationCodeEmailAsync(
+    SmtpSettings settings, string toEmail, string code, CancellationToken cancellationToken)
+{
+    var body = $"Your fixIt account verification code is {code}.\n\nIt expires in 10 minutes and can only be used once. If you did not request this code, you can ignore this email.";
+    using var message = new MailMessage
+    {
+        From = new MailAddress(settings.FromEmail!, settings.FromName),
+        Subject = "Verify your fixIt account",
+        Body = body
+    };
+    message.To.Add(new MailAddress(toEmail));
+    message.AlternateViews.Add(AlternateView.CreateAlternateViewFromString(
+        body, Encoding.UTF8, "text/plain"));
+
+    using var client = new SmtpClient(settings.Host!, settings.Port)
+    {
+        EnableSsl = true,
+        UseDefaultCredentials = false,
+        Credentials = new NetworkCredential(settings.Username, settings.Password),
+        DeliveryMethod = SmtpDeliveryMethod.Network,
+        Timeout = 15000
+    };
+    await client.SendMailAsync(message, cancellationToken);
+}
+
 public record RegisterRequest(string? Username, string? Email, string? Password, string? ConfirmPassword, int? GradeLevelId, int? SectionId);
+public record RegistrationEmailRequest(string? Email);
+public record VerifyRegistrationRequest(string? Email, string? Code);
 public record LoginRequest(string? Email, string? Password);
 public record ForgotPasswordRequest(string? Email);
 public record VerifyResetCodeRequest(string? Email, string? Code);
@@ -2050,6 +2330,20 @@ public class PasswordResetCode
     public DateTime? UsedUtc { get; set; }
 }
 
+public class PendingRegistration
+{
+    public string Email { get; set; } = "";
+    public string Username { get; set; } = "";
+    public string PasswordHash { get; set; } = "";
+    public int? GradeLevelId { get; set; }
+    public int? SectionId { get; set; }
+    public byte[]? CodeHash { get; set; }
+    public byte[]? CodeSalt { get; set; }
+    public DateTime ExpiresUtc { get; set; }
+    public DateTime CreatedUtc { get; set; }
+    public int Attempts { get; set; }
+}
+
 public class MaintenanceReport
 {
     public int Id { get; set; }
@@ -2095,6 +2389,7 @@ public class AppDbContext(DbContextOptions<AppDbContext> options) : DbContext(op
     public DbSet<SchoolGrade> SchoolGrades => Set<SchoolGrade>();
     public DbSet<SchoolSection> SchoolSections => Set<SchoolSection>();
     public DbSet<PasswordResetCode> PasswordResetCodes => Set<PasswordResetCode>();
+    public DbSet<PendingRegistration> PendingRegistrations => Set<PendingRegistration>();
     public DbSet<MaintenanceReport> Reports => Set<MaintenanceReport>();
     public DbSet<ReportActivity> ReportActivities => Set<ReportActivity>();
     public DbSet<ReportNotification> ReportNotifications => Set<ReportNotification>();
@@ -2109,6 +2404,10 @@ public class AppDbContext(DbContextOptions<AppDbContext> options) : DbContext(op
             .HasFilter("\"PasswordResetTokenHash\" IS NOT NULL");
         user.HasIndex(x => x.GradeLevelId);
         user.HasIndex(x => x.SectionId);
+
+        var pendingRegistration = modelBuilder.Entity<PendingRegistration>();
+        pendingRegistration.HasKey(item => item.Email);
+        pendingRegistration.HasIndex(item => item.Username).IsUnique();
 
         var grade = modelBuilder.Entity<SchoolGrade>();
         grade.Property(item => item.Name).UseCollation("NOCASE");
