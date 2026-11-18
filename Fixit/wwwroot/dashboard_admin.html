@@ -34,9 +34,8 @@
         <nav class="admin-nav" aria-label="Administrator navigation">
             <p class="nav-caption">WORKSPACE</p>
             <button class="admin-nav-link is-active" type="button" data-view="overview"><span aria-hidden="true">◫</span> Overview</button>
-            <button class="admin-nav-link" type="button" data-view="reports"><span aria-hidden="true">▤</span> Report management</button>
-            <button class="admin-nav-link" type="button" data-view="classes"><span aria-hidden="true">▦</span> Class Management</button>
-            <div class="nav-school-note"><span class="school-monogram small-monogram" aria-hidden="true" style="margin-top: 390px;">LI</span><span>LIFE Institute<br><small>Mariveles</small></span></div>
+            <button class="admin-nav-link" type="button" data-view="settings"><span aria-hidden="true">⚙</span> Settings</button>
+            <div class="nav-school-note"><span class="school-monogram small-monogram" aria-hidden="true">LI</span><span>LIFE Institute<br><small>Mariveles</small></span></div>
         </nav>
 
         <main class="admin-main">
@@ -51,13 +50,13 @@
                     <div class="metric-item"><span>Resolved</span><strong id="overview-resolved">—</strong></div>
                 </div>
                 <div class="overview-grid">
-                    <section class="content-section">
-                        <div class="section-title-row"><div><p class="eyebrow">CLASS FOLDERS</p><h2>Reports by grade level</h2></div></div>
-                        <div id="overview-grades" class="overview-grade-list"><p class="loading-state">Loading school totals…</p></div>
+                    <section class="content-section overview-reports-section">
+                        <div class="section-title-row"><div><p class="eyebrow">SCHOOL-WIDE REPORTS</p><h2>Latest submissions</h2></div></div>
+                        <div id="overview-reports" class="overview-report-table-wrap" aria-live="polite"><p class="loading-state">Loading reports…</p></div>
                     </section>
-                    <section class="content-section">
-                        <div class="section-title-row"><div><p class="eyebrow">RECENT CHANGES</p><h2>Administrative activity</h2></div></div>
-                        <ol id="overview-activity" class="activity-list"><li class="loading-state">Loading activity…</li></ol>
+                    <section class="content-section overview-grades-section">
+                        <div class="section-title-row"><div><p class="eyebrow">CLASS FOLDERS</p><h2>Reports by grade level</h2></div></div>
+                        <div id="overview-grades" class="overview-grade-list"><p class="loading-state">Loading grade levels…</p></div>
                     </section>
                 </div>
                 <p class="page-message" id="dashboard-message" role="status" aria-live="polite"></p>
@@ -65,23 +64,31 @@
 
             <section class="admin-panel" data-panel="reports" aria-labelledby="folders-title" hidden>
                 <div class="admin-page-heading">
-                    <div><p class="eyebrow">GRADE LEVEL → SECTION → REPORTS</p><h1 id="folders-title">Report management</h1><p class="lede">Open a class folder to review reports submitted by students assigned to that class.</p></div>
+                    <div><p class="eyebrow">GRADE LEVEL REPORTS</p><h1 id="folders-title">Report workspace</h1><p class="lede">Review every report submitted by students in this grade level, across all sections.</p></div>
                 </div>
                 <nav class="folder-breadcrumbs" id="folder-breadcrumbs" aria-label="Report folder location"></nav>
                 <div class="folder-toolbar" id="folder-toolbar" hidden>
-                    <label class="filter-search">Search in this section<input id="folder-search" type="search" placeholder="Title, student, place, or details"></label>
+                    <label class="filter-search">Search this grade<input id="folder-search" type="search" placeholder="Title, student, place, or details"></label>
                     <label>Status<select id="folder-status"><option value="">All statuses</option><option>Pending</option><option>Acknowledged</option><option>In Progress</option><option>Resolved</option><option>Rejected</option></select></label>
                     <label>Category<select id="folder-category"><option value="">All categories</option><option>General</option><option>Electrical</option><option>Plumbing</option><option>Cleaning</option><option>Furniture</option><option>Safety</option><option>Other</option></select></label>
-                    <label>Sort<select id="folder-sort"><option value="newest">Newest first</option><option value="oldest">Oldest first</option><option value="status">Status</option><option value="priority">Priority</option></select></label>
+                    <label>Section<select id="folder-section"><option value="">All sections</option></select></label>
+                    <label>Sort<select id="folder-sort">
+                        <option value="newest">Newest first</option><option value="oldest">Oldest first</option>
+                        <option value="severity-desc">Highest severity first</option><option value="severity-asc">Lowest severity first</option>
+                        <option value="unresolved">Unresolved first</option><option value="resolved">Resolved first</option>
+                        <option value="recently-updated">Recently updated</option><option value="oldest-updated">Oldest updated</option>
+                    </select></label>
                     <button class="button button-quiet" id="folder-clear" type="button">Clear</button>
                 </div>
-                <div id="folder-content" class="folder-content" aria-live="polite"><p class="loading-state">Loading report folders…</p></div>
+                <div id="folder-content" class="folder-content" aria-live="polite"><p class="loading-state">Choose a grade level to open its reports.</p></div>
             </section>
 
-            <section class="admin-panel" data-panel="classes" aria-labelledby="class-options-title" hidden>
+            <section class="admin-panel" data-panel="settings" aria-labelledby="class-options-title" hidden>
                 <div class="admin-page-heading">
-                    <div><p class="eyebrow">SCHOOL CLASS LIST</p><h1 id="class-options-title">Manage Class Options</h1><p class="lede">Import the current grade levels and sections from an Excel workbook. Existing student assignments and reports are kept if an option is removed.</p></div>
+                    <div><p class="eyebrow">SCHOOL DIRECTORY</p><h1 id="class-options-title">Settings</h1><p class="lede">Manage Grade Levels, Sections, and the class choices used for student assignments.</p></div>
                 </div>
+                <section class="settings-section" aria-labelledby="class-management-title">
+                <div class="section-title-row"><div><p class="eyebrow">CLASS MANAGEMENT</p><h2 id="class-management-title">Grade Levels and Sections</h2></div></div>
                 <div class="class-management-actions" aria-label="Create class folders">
                     <button class="button button-outline" type="button" data-create-grade>＋ New grade level</button>
                     <button class="button button-outline" type="button" data-create-section>＋ New section</button>
@@ -114,9 +121,10 @@
                     </div>
                 </section>
                 <section class="class-option-current" aria-labelledby="class-options-current-title">
-                    <div class="section-title-row"><div><p class="eyebrow">CURRENTLY AVAILABLE</p><h2 id="class-options-current-title">Active class options</h2></div></div>
-                    <p class="class-options-help">Use Report management folder actions to rename, archive, restore, or permanently delete folders that have no dependencies. Archived folders remain available there for report history.</p>
+                    <div class="section-title-row"><div><p class="eyebrow">DIRECTORY MANAGEMENT</p><h2 id="class-options-current-title">Class options</h2></div></div>
+                    <p class="class-options-help">Rename or archive Grade Levels and Sections here. Existing student assignments and report history remain linked to their original records.</p>
                     <div id="class-options-list" class="directory-list" aria-live="polite"><p class="loading-state">Loading class options…</p></div>
+                </section>
                 </section>
             </section>
         </main>
@@ -156,7 +164,7 @@
                 <label for="admin-status">Status</label>
                 <select id="admin-status" name="status"><option>Pending</option><option>Acknowledged</option><option>In Progress</option><option>Resolved</option><option>Rejected</option></select>
                 <div class="form-pair">
-                    <div><label for="admin-priority">Priority</label><select id="admin-priority" name="priority"><option>Low</option><option>Normal</option><option>High</option></select></div>
+                    <div><label for="admin-priority">Priority</label><select id="admin-priority" name="priority"><option>Low</option><option>Normal</option><option>High</option><option>Critical</option></select></div>
                     <div><label for="admin-assignee">Assigned to</label><input id="admin-assignee" name="assignee" maxlength="60" placeholder="Optional maintenance staff"></div>
                 </div>
                 <label for="admin-public-update">Update for student</label>

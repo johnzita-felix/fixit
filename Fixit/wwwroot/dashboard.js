@@ -4,7 +4,7 @@
     const page = body.dataset.page;
     const isAdmin = role === 'admin';
     const statusOptions = ['Pending', 'Acknowledged', 'In Progress', 'Resolved', 'Rejected'];
-    const priorities = ['Low', 'Normal', 'High'];
+    const priorities = ['Low', 'Normal', 'High', 'Critical'];
     let session;
     let profile;
     let classes = [];
@@ -12,14 +12,11 @@
     let notifications = [];
     let activeReportId = null;
     let activeGradeId = null;
-    let activeSectionId = null;
-    let activeFolder = 'grades';
-    let showArchivedGrades = false;
-    let showArchivedSections = false;
+    let activeFolder = 'overview';
+    let overviewPage = 1;
+    let gradeReportsPage = 1;
+    let adminRefreshTimer = null;
     let classFolderDialogState = null;
-    let classViewGradeId = null;
-    let showArchivedClassGrades = false;
-    let showArchivedClassSections = false;
 
     const byId = id => document.getElementById(id);
     const escapeHtml = value => String(value ?? '').replace(/[&<>"']/g, character => ({
@@ -73,6 +70,23 @@
 
     function statusPill(status) {
         return `<span class="status-pill status-${statusSlug(status)}">${escapeHtml(status || 'Pending')}</span>`;
+    }
+
+    function priorityPill(priority) {
+        const value = priorities.includes(priority) ? priority : 'Normal';
+        return `<span class="priority-pill priority-${value.toLowerCase()}">${escapeHtml(value)}</span>`;
+    }
+
+    function reviewLabel(isReviewed) {
+        return isReviewed
+            ? '<span class="review-state is-reviewed">Reviewed</span>'
+            : '<span class="review-state is-unreviewed"><span aria-hidden="true"></span>New · Unreviewed</span>';
+    }
+
+    function reviewAction(report) {
+        return report.isReviewed
+            ? reviewLabel(true)
+            : `<button class="review-action" type="button" data-mark-reviewed="${report.id}">Mark reviewed</button>`;
     }
 
     function updateIdentity() {
@@ -268,32 +282,13 @@
     function adminBreadcrumbs() {
         const nav = byId('folder-breadcrumbs');
         if (!nav) return;
-        const parts = ['<button type="button" data-folder-level="grades">All grades</button>'];
-        if (activeFolder === 'unassigned') {
-            parts.push('<span aria-hidden="true">/</span><span aria-current="page">Unassigned reports</span>');
-            nav.innerHTML = parts.join('');
-            return;
-        }
+        const parts = ['<button type="button" data-folder-level="overview">Overview</button>'];
         if (activeGradeId) {
             const grade = classes.find(item => item.id === activeGradeId);
             parts.push('<span aria-hidden="true">/</span>');
-            parts.push(activeSectionId
-                ? `<button type="button" data-folder-level="sections">${escapeHtml(grade?.name || 'Grade level')}</button>`
-                : `<span aria-current="page">${escapeHtml(grade?.name || 'Grade level')}</span>`);
-        }
-        if (activeSectionId) {
-            const grade = classes.find(item => item.id === activeGradeId);
-            const section = grade?.sections.find(item => item.id === activeSectionId);
-            parts.push('<span aria-hidden="true">/</span>');
-            parts.push(activeFolder === 'reports'
-                ? `<span aria-current="page">${escapeHtml(section?.name || 'Section')}</span>`
-                : `<span aria-current="page">Unassigned reports</span>`);
+            parts.push(`<span aria-current="page">${escapeHtml(grade?.name || 'Grade level')}</span>`);
         }
         nav.innerHTML = parts.join('');
-    }
-
-    function folderIconSvg() {
-        return '<svg viewBox="0 0 32 26" focusable="false" aria-hidden="true"><path d="M2.5 5.5a2 2 0 0 1 2-2h8l3 3h12a2 2 0 0 1 2 2v12a2 2 0 0 1-2 2h-23a2 2 0 0 1-2-2z"></path><path d="M2.5 9h27"></path></svg>';
     }
 
     function folderMenu(type, id, name, isActive) {
@@ -305,196 +300,22 @@
             </div>`;
     }
 
-    function folderCard({ id, name, type, isActive = true, sectionCount, studentCount, reportCount = 0, pendingReportCount = 0, unassignedReportCount = 0 }) {
-        const primaryStat = type === 'grade'
-            ? `${sectionCount || 0} ${sectionCount === 1 ? 'section' : 'sections'}`
-            : `${studentCount || 0} ${studentCount === 1 ? 'student' : 'students'}`;
-        const notice = pendingReportCount || unassignedReportCount
-            ? `<span class="class-folder-alert">${pendingReportCount ? `${pendingReportCount} pending` : ''}${pendingReportCount && unassignedReportCount ? ' · ' : ''}${unassignedReportCount ? `${unassignedReportCount} unassigned` : ''}</span>`
-            : '';
-        return `<article class="class-folder${isActive ? '' : ' is-archived'}">
-            <button type="button" class="class-folder-open" data-folder-action="${type}" data-folder-id="${id}" aria-label="Open ${escapeHtml(name)} folder">
-                <span class="class-folder-visual" aria-hidden="true"><span class="class-folder-tab"></span><span class="class-folder-paper"></span><span class="class-folder-glyph">${folderIconSvg()}</span><span class="class-folder-corner">↗</span></span>
-                <span class="class-folder-copy">
-                    <span class="class-folder-kind">${type === 'grade' ? 'GRADE LEVEL' : 'SECTION'}${!isActive ? '<span class="class-folder-archived">ARCHIVED</span>' : ''}</span>
-                    <strong class="class-folder-name">${escapeHtml(name)}</strong>
-                    <span class="class-folder-metrics"><span>${primaryStat}</span><span>${reportCount} ${reportCount === 1 ? 'report' : 'reports'}</span></span>
-                    ${notice}
-                    <span class="class-folder-open-label">Open folder <span aria-hidden="true">↗</span></span>
-                </span>
-            </button>
-            <div class="folder-card-menu">${folderMenu(type, id, name, isActive)}</div>
-        </article>`;
-    }
-
-    function classWorkspaceFolderCard(options) {
-        return folderCard(options).replace('data-folder-action=', 'data-class-open=');
-    }
-
-    function renderClassWorkspaceBreadcrumb(grade) {
-        const breadcrumbs = byId('class-workspace-breadcrumb');
-        if (!breadcrumbs) return;
-        breadcrumbs.innerHTML = grade
-            ? `<button type="button" data-class-root>Class Management</button><span aria-hidden="true">/</span><span aria-current="page">${escapeHtml(grade.name)}</span>`
-            : '<span aria-current="page">Class Management</span>';
-    }
-
-    function classWorkspaceEmpty(title, description, action = 'grade') {
-        const gradeEmpty = action === 'grade';
-        const eyebrow = action === null
-            ? 'CLASS RECORDS'
-            : gradeEmpty ? 'START WITH A GRADE LEVEL' : 'THIS GRADE IS READY FOR SECTIONS';
-        return `<div class="class-folder-empty">
-            <div class="class-empty-art" aria-hidden="true"><span class="class-empty-sheet"></span><span class="class-empty-folder">${folderIconSvg()}</span></div>
-            <p class="eyebrow">${eyebrow}</p>
-            <h2>${escapeHtml(title)}</h2>
-            <p>${escapeHtml(description)}</p>
-            ${action ? `<button type="button" class="button button-primary" ${gradeEmpty ? 'data-create-grade' : 'data-create-section'}><span aria-hidden="true">＋</span> ${gradeEmpty ? 'Add Grade Level' : 'Add Section'}</button>` : ''}
-        </div>`;
-    }
-
-    async function renderClassWorkspace() {
-        const workspace = byId('class-folder-workspace');
-        if (!workspace) return;
-        const heading = byId('class-options-title');
-        const lede = byId('class-workspace-lede');
-        const summary = byId('class-workspace-summary');
-        const grade = classes.find(item => item.id === classViewGradeId) || null;
-        byId('add-class-section').hidden = !grade || !grade.isActive;
-        document.querySelectorAll('.class-workspace-actions [data-create-grade]').forEach(button => { button.hidden = Boolean(grade); });
-        if (!grade) {
-            renderClassWorkspaceBreadcrumb(null);
-            heading.textContent = 'Class Management';
-            if (lede) lede.textContent = 'Manage grade levels and sections for student assignments.';
-            workspace.innerHTML = '<p class="loading-state">Loading grade levels…</p>';
-            const [gradeReports, unassigned] = await Promise.all([
-                request('/api/admin/report-folders/grades?includeArchived=true'),
-                request('/api/admin/report-folders/unassigned')
-            ]);
-            const reportsByGrade = new Map(gradeReports.map(item => [item.id, item]));
-            const visible = classes.filter(item => item.isActive !== showArchivedClassGrades);
-            const archivedCount = classes.filter(item => !item.isActive).length;
-            const activeCount = classes.filter(item => item.isActive).length;
-            const sectionCount = classes.filter(item => item.isActive)
-                .reduce((total, item) => total + item.sections.filter(section => section.isActive).length, 0);
-            const totalReports = gradeReports.reduce((total, item) => total + item.reportCount, 0);
-            summary.innerHTML = `<span><strong>${activeCount}</strong> active grade levels</span><span><strong>${sectionCount}</strong> sections</span><span><strong>${totalReports + unassigned.length}</strong> reports</span>`;
-            const archiveToggle = archivedCount
-                ? `<button type="button" class="class-archive-toggle" data-class-toggle-archived="grades">${showArchivedClassGrades ? '← Back to active grades' : `View archived grades <span>${archivedCount}</span>`}</button>`
-                : '';
-            workspace.innerHTML = `<div class="class-directory-head"><div><p class="eyebrow">${showArchivedClassGrades ? 'RETAINED CLASS RECORDS' : 'THE SCHOOL DIRECTORY'}</p><h2>${showArchivedClassGrades ? 'Archived grade levels' : 'Grade Levels'}</h2><p>${showArchivedClassGrades ? 'Archived folders stay available for historical student and report records.' : 'Select a grade level to manage its sections.'}</p></div>${archiveToggle}</div>
-                ${visible.length
-                    ? `<div class="folder-grid class-directory-grid">${visible.map(item => {
-                        const counts = reportsByGrade.get(item.id);
-                        return classWorkspaceFolderCard({
-                            id: item.id, name: item.name, type: 'grade', isActive: item.isActive,
-                            sectionCount: counts?.sectionCount ?? item.sections.filter(section => section.isActive).length,
-                            reportCount: counts?.reportCount ?? 0,
-                            pendingReportCount: counts?.pendingReportCount ?? 0,
-                            unassignedReportCount: counts?.unassignedReportCount ?? 0
-                        });
-                    }).join('')}</div>`
-                    : classWorkspaceEmpty(
-                        showArchivedClassGrades ? 'No archived grade levels' : 'No grade levels yet',
-                        showArchivedClassGrades ? 'Archived grade levels will appear here.' : 'Create the first grade-level folder, or import the school’s class list.',
-                        showArchivedClassGrades ? null : 'grade')}
-                ${!showArchivedClassGrades && unassigned.length ? `<button type="button" class="class-unassigned-link" data-class-unassigned>Review ${unassigned.length} unassigned ${unassigned.length === 1 ? 'report' : 'reports'} <span aria-hidden="true">→</span></button>` : ''}`;
-            return;
-        }
-
-        renderClassWorkspaceBreadcrumb(grade);
-        heading.textContent = grade.name;
-        if (lede) lede.textContent = 'Manage this grade level’s sections and review its report activity.';
-        workspace.innerHTML = '<p class="loading-state">Opening grade level…</p>';
-        const result = await request(`/api/admin/report-folders/grades/${grade.id}/sections?includeArchived=true`);
-        const sections = result.sections.filter(item => item.isActive !== showArchivedClassSections);
-        const activeSections = result.sections.filter(item => item.isActive);
-        const archivedCount = result.sections.filter(item => !item.isActive).length;
-        const totalReports = result.sections.reduce((total, item) => total + item.reportCount, 0);
-        const totalStudents = result.sections.reduce((total, item) => total + item.studentCount, 0);
-        summary.innerHTML = `<span><strong>${activeSections.length}</strong> active sections</span><span><strong>${totalStudents}</strong> students</span><span><strong>${totalReports}</strong> reports</span>`;
-        const archiveToggle = archivedCount
-            ? `<button type="button" class="class-archive-toggle" data-class-toggle-archived="sections">${showArchivedClassSections ? '← Back to active sections' : `View archived sections <span>${archivedCount}</span>`}</button>`
-            : '';
-        workspace.innerHTML = `<section class="class-grade-context">
-                <span class="class-grade-seal" aria-hidden="true">${escapeHtml(grade.name.match(/\d+/)?.[0] || 'LI')}</span>
-                <div><p class="eyebrow">GRADE LEVEL FOLDER</p><h2>${escapeHtml(grade.name)}</h2><p>${activeSections.length} active ${activeSections.length === 1 ? 'section' : 'sections'} · ${totalReports} ${totalReports === 1 ? 'report' : 'reports'}</p></div>
-                <span class="class-grade-index">CLASS DIRECTORY / ${String(grade.id).padStart(2, '0')}</span>
-            </section>
-            <div class="class-directory-head"><div><p class="eyebrow">${showArchivedClassSections ? 'RETAINED CLASS RECORDS' : 'INSIDE THIS GRADE LEVEL'}</p><h2>${showArchivedClassSections ? 'Archived sections' : 'Sections'}</h2><p>${showArchivedClassSections ? 'Archived sections and their history remain available to administrators.' : 'Open a section to review reports submitted by its students.'}</p></div>${archiveToggle}</div>
-            ${sections.length
-                ? `<div class="folder-grid class-directory-grid class-section-grid">${sections.map(section => classWorkspaceFolderCard({
-                    id: section.id, name: section.name, type: 'section', isActive: section.isActive,
-                    studentCount: section.studentCount, reportCount: section.reportCount,
-                    pendingReportCount: section.pendingReportCount
-                }).replace('data-class-open="section"', `data-class-open="section" data-grade-id="${grade.id}"`)).join('')}</div>`
-                : classWorkspaceEmpty(
-                    showArchivedClassSections ? 'No archived sections' : 'No sections in this grade yet',
-                    showArchivedClassSections ? 'Archived sections will appear here.' : 'Add a section to complete this grade-level folder.',
-                    showArchivedClassSections || !grade.isActive ? null : 'section')}
-            ${!grade.isActive ? '<p class="archived-parent-note">This grade level is archived. Student dropdowns exclude it, but its sections and report history remain available.</p>' : ''}`;
-    }
-
-    function renderAdminReportTable(items) {
+    function renderAdminReportTable(items, includeGrade = false) {
         if (!items.length)
-            return emptyState('No reports in this folder', 'Reports from students assigned to this section will appear here.');
-        return `<table class="admin-report-list"><thead><tr><th>Report</th><th>Submitted by</th><th>Status</th><th>Location · date</th></tr></thead><tbody>
-            ${items.map(report => `<tr><td><button type="button" data-action="open-report" data-report-id="${report.id}">${escapeHtml(report.title)}</button></td>
-                <td>${escapeHtml(report.reporter || 'Student')}</td><td>${statusPill(report.status)}</td>
-                <td>${escapeHtml(report.location)} · ${formatDate(report.createdAt)}</td></tr>`).join('')}
-        </tbody></table>`;
-    }
-
-    async function loadGradeFolders() {
-        activeFolder = 'grades';
-        activeGradeId = null;
-        activeSectionId = null;
-        adminBreadcrumbs();
-        byId('folder-toolbar').hidden = true;
-        byId('folder-content').innerHTML = '<p class="loading-state">Loading grade folders…</p>';
-        const [grades, unassigned] = await Promise.all([
-            request('/api/admin/report-folders/grades?includeArchived=true'),
-            request('/api/admin/report-folders/unassigned')
-        ]);
-        const folders = grades.filter(grade => grade.isActive !== showArchivedGrades);
-        const archivedCount = grades.filter(grade => !grade.isActive).length;
-        const title = showArchivedGrades ? 'Archived grade levels' : 'Grade levels';
-        const toggle = archivedCount
-            ? `<button class="button button-quiet folder-archive-toggle" type="button" data-toggle-archived="grades" aria-pressed="${showArchivedGrades}">${showArchivedGrades ? 'Show active folders' : `View archived (${archivedCount})`}</button>`
-            : '';
-        byId('folder-content').innerHTML = `<div class="folder-section-heading"><div><h2>${title}</h2><span class="record-count">${folders.length} ${folders.length === 1 ? 'folder' : 'folders'}</span></div>${toggle}</div>
-            ${folders.length ? `<div class="folder-grid">${folders.map(grade => folderCard({
-                id: grade.id, name: grade.name, type: 'grade', isActive: grade.isActive,
-                sectionCount: grade.sectionCount, reportCount: grade.reportCount,
-                pendingReportCount: grade.pendingReportCount, unassignedReportCount: grade.unassignedReportCount
-            })).join('')}</div>` : emptyState(showArchivedGrades ? 'No archived grade levels' : 'No grade levels configured', showArchivedGrades ? 'Archived folders will appear here.' : 'Import the school’s official grade levels and sections in Manage Class Options.')}
-            <div class="folder-unassigned"><div class="folder-section-heading"><div><h2>Reports outside class folders</h2><span class="record-count">${unassigned.length} ${unassigned.length === 1 ? 'report' : 'reports'}</span></div></div>
-            <div class="folder-grid"><article class="folder-card folder-card-utility"><button type="button" class="folder-card-open" data-folder-action="unassigned" data-folder-id="0" aria-label="Open unassigned reports folder"><span class="folder-card-icon">${folderIconSvg()}</span><span class="folder-card-title">Unassigned reports</span><span class="folder-card-stats"><span>Reports without a complete class assignment</span></span><span class="folder-attention">${unassigned.length} ${unassigned.length === 1 ? 'report' : 'reports'}</span><span class="folder-open-hint">Open folder <span aria-hidden="true">↗</span></span></button></article></div></div>`;
-        adminBreadcrumbs();
-    }
-
-    async function loadSectionFolders(gradeId) {
-        activeFolder = 'sections';
-        activeGradeId = Number(gradeId);
-        activeSectionId = null;
-        adminBreadcrumbs();
-        byId('folder-toolbar').hidden = true;
-        byId('folder-content').innerHTML = '<p class="loading-state">Opening grade folder…</p>';
-        const result = await request(`/api/admin/report-folders/grades/${activeGradeId}/sections?includeArchived=true`);
-        const grade = classes.find(item => item.id === activeGradeId);
-        const sections = result.sections.filter(section => section.isActive !== showArchivedSections);
-        const archivedCount = result.sections.filter(section => !section.isActive).length;
-        const toggle = archivedCount
-            ? `<button class="button button-quiet folder-archive-toggle" type="button" data-toggle-archived="sections" aria-pressed="${showArchivedSections}">${showArchivedSections ? 'Show active folders' : `View archived (${archivedCount})`}</button>`
-            : '';
-        byId('folder-content').innerHTML = `<div class="folder-section-heading"><div><h2>${escapeHtml(result.gradeLevel)} sections</h2><span class="record-count">${sections.length} ${sections.length === 1 ? 'section' : 'sections'}</span></div>${toggle}</div>
-            ${sections.length ? `<div class="folder-grid">${sections.map(section => folderCard({
-                id: section.id, name: section.name, type: 'section', isActive: section.isActive,
-                studentCount: section.studentCount, reportCount: section.reportCount,
-                pendingReportCount: section.pendingReportCount
-            })).join('')}</div>` : emptyState(showArchivedSections ? 'No archived sections' : 'No sections configured', showArchivedSections ? 'Archived sections will appear here.' : 'Import or create sections in Manage Class Options.')}
-            ${grade && !grade.isActive ? '<p class="archived-parent-note">This grade level is archived. Its sections and report history remain available to administrators, but students cannot select this class.</p>' : ''}`;
-        adminBreadcrumbs();
+            return emptyState('No reports match these filters', 'Try changing the search or filters to see more reports.');
+        return `<div class="admin-report-table-scroll"><table class="admin-report-list"><thead><tr>
+            <th>Report</th>${includeGrade ? '<th>Grade Level</th>' : ''}<th>Category</th><th>Section</th>
+            <th>Submitted</th><th>Priority</th><th>Status</th><th>Review</th></tr></thead><tbody>
+            ${items.map(report => `<tr class="${report.isReviewed ? '' : 'is-new-report'}">
+                <td><button type="button" class="report-title-link" data-action="open-report" data-report-id="${report.id}">
+                    <span>FI-${String(report.id).padStart(6, '0')} · ${escapeHtml(report.title)}</span>
+                    ${report.description ? `<small>${escapeHtml(report.description)}</small>` : ''}
+                </button></td>
+                ${includeGrade ? `<td>${escapeHtml(report.gradeLevel || 'Unassigned')}</td>` : ''}
+                <td>${escapeHtml(report.category)}</td><td>${escapeHtml(report.section || '—')}</td>
+                <td>${formatDate(report.createdAt)}</td><td>${priorityPill(report.priority)}</td>
+                <td>${statusPill(report.status)}</td><td>${reviewAction(report)}</td></tr>`).join('')}
+        </tbody></table></div>`;
     }
 
     function folderEndpoint(type, id, action) {
@@ -632,17 +453,11 @@
                     body: JSON.stringify({ isActive })
                 });
             }
-            if (state.mode === 'restore' || state.mode === 'delete') {
-                if (state.type === 'grade') showArchivedGrades = false;
-                else showArchivedSections = false;
-            }
             byId('class-folder-dialog').close();
             classFolderDialogState = null;
             showMessage(result.message);
             await loadClassDirectory();
-            if (activeFolder === 'grades') await loadGradeFolders();
-            else if (activeFolder === 'sections') await loadSectionFolders(activeGradeId);
-            else if (activeFolder === 'reports') await loadSectionReports();
+            if (activeFolder === 'reports') await loadGradeReports();
             await loadAdminOverview();
         } catch (requestError) {
             error.textContent = requestError.message;
@@ -651,8 +466,8 @@
         }
     }
 
-    async function loadSectionReports() {
-        if (!activeSectionId) return;
+    async function loadGradeReports() {
+        if (!activeGradeId) return;
         activeFolder = 'reports';
         adminBreadcrumbs();
         byId('folder-toolbar').hidden = false;
@@ -661,47 +476,68 @@
             search: byId('folder-search').value.trim(),
             status: byId('folder-status').value,
             category: byId('folder-category').value,
-            sort: byId('folder-sort').value
+            sectionId: byId('folder-section').value,
+            sort: byId('folder-sort').value,
+            page: String(gradeReportsPage)
         });
-        const result = await request(`/api/admin/report-folders/sections/${activeSectionId}/reports?${params}`);
-        byId('folder-content').innerHTML = `<div class="folder-section-heading"><h2>${escapeHtml(result.gradeLevel)} · ${escapeHtml(result.section)}</h2><span class="record-count">${result.reports.length} ${result.reports.length === 1 ? 'report' : 'reports'}</span></div>
-            ${renderAdminReportTable(result.reports)}`;
+        const result = await request(`/api/admin/report-folders/grades/${activeGradeId}/reports?${params}`);
+        const sectionSelect = byId('folder-section');
+        const selectedSection = result.sections.some(section => String(section.id) === sectionSelect.value)
+            ? sectionSelect.value : '';
+        sectionSelect.innerHTML = `<option value="">All sections</option>${result.sections.map(section =>
+            `<option value="${section.id}">${escapeHtml(section.name)}</option>`).join('')}`;
+        sectionSelect.value = selectedSection;
+        if (!selectedSection && params.get('sectionId')) {
+            gradeReportsPage = 1;
+            return loadGradeReports();
+        }
+        const firstItem = result.totalReports ? (result.page - 1) * result.pageSize + 1 : 0;
+        const lastItem = Math.min(result.page * result.pageSize, result.totalReports);
+        const pagination = result.totalReports
+            ? `<div class="table-pagination"><span>Showing ${firstItem}–${lastItem} of ${result.totalReports}</span>
+                <div><button type="button" data-grade-page="${result.page - 1}" ${result.page <= 1 ? 'disabled' : ''}>Previous</button>
+                <span>Page ${result.page} of ${result.totalPages}</span>
+                <button type="button" data-grade-page="${result.page + 1}" ${result.page >= result.totalPages ? 'disabled' : ''}>Next</button></div></div>`
+            : '';
+        byId('folder-content').innerHTML = `<div class="folder-section-heading"><div><h2>${escapeHtml(result.gradeLevel)} reports</h2>
+            <span class="record-count">${result.totalReports} ${result.totalReports === 1 ? 'report' : 'reports'} · all sections</span></div></div>
+            ${renderAdminReportTable(result.reports)}${pagination}`;
     }
 
-    async function loadUnassignedReports() {
-        activeFolder = 'unassigned';
-        activeGradeId = null;
-        activeSectionId = 0;
-        adminBreadcrumbs();
-        byId('folder-toolbar').hidden = false;
-        byId('folder-content').innerHTML = '<p class="loading-state">Loading unassigned reports…</p>';
-        const params = new URLSearchParams({
-            search: byId('folder-search').value.trim(),
-            status: byId('folder-status').value,
-            category: byId('folder-category').value,
-            sort: byId('folder-sort').value
-        });
-        const items = await request(`/api/admin/report-folders/unassigned?${params}`);
-        byId('folder-content').innerHTML = `<div class="folder-section-heading"><h2>Unassigned reports</h2><span class="record-count">${items.length} ${items.length === 1 ? 'report' : 'reports'}</span></div>
-            ${items.length ? `<table class="admin-report-list"><thead><tr><th>Report</th><th>Submitted by</th><th>Class details</th><th>Status · date</th></tr></thead><tbody>
-                ${items.map(report => `<tr><td><button type="button" data-action="open-report" data-report-id="${report.id}">${escapeHtml(report.title)}</button></td>
-                <td>${escapeHtml(report.reporter)}</td><td>${escapeHtml(report.gradeLevel || 'Grade not set')} · ${escapeHtml(report.section || 'Section not set')}</td>
-                <td>${statusPill(report.status)} · ${formatDate(report.createdAt)}</td></tr>`).join('')}
-            </tbody></table>` : emptyState('No unassigned reports', 'Reports without a complete grade and section assignment will appear here.')}`;
+    function renderOverviewGradeFolder(grade) {
+        const unreviewed = grade.unreviewedCount > 0;
+        const gradeNumber = grade.name.match(/\d+/)?.[0] || 'LI';
+        return `<button class="overview-grade-folder${unreviewed ? ' has-unreviewed' : ''}" type="button"
+            data-open-grade="${grade.id}" aria-label="Open ${escapeHtml(grade.name)} reports; ${grade.reportCount} reports${unreviewed ? `, ${grade.unreviewedCount} unreviewed` : ''}">
+            <span class="overview-folder-icon" aria-hidden="true"><span>${escapeHtml(gradeNumber)}</span></span>
+            <span class="overview-folder-copy"><strong>${escapeHtml(grade.name)}</strong>
+                <small>${grade.reportCount} ${grade.reportCount === 1 ? 'report' : 'reports'}</small></span>
+            ${unreviewed ? `<span class="grade-notification-dot" title="${grade.unreviewedCount} unreviewed reports" aria-label="${grade.unreviewedCount} unreviewed reports"></span>` : ''}
+            <span class="overview-folder-arrow" aria-hidden="true">↗</span>
+        </button>`;
     }
 
     async function loadAdminOverview() {
-        const data = await request('/api/admin/overview');
+        const data = await request(`/api/admin/overview?page=${overviewPage}&pageSize=10`);
+        overviewPage = data.page;
         byId('overview-total').textContent = data.total;
         byId('overview-pending').textContent = data.pending + data.acknowledged;
         byId('overview-progress').textContent = data.inProgress;
         byId('overview-resolved').textContent = data.resolved;
-        byId('overview-grades').innerHTML = data.reportsByGrade.length
-            ? data.reportsByGrade.map(item => `<button class="overview-grade-row" type="button" data-open-grade="${escapeHtml(item.gradeLevel)}"><strong>${escapeHtml(item.gradeLevel)}</strong><span>${item.reportCount} ${item.reportCount === 1 ? 'report' : 'reports'} <span aria-hidden="true">→</span></span></button>`).join('')
-            : '<p class="empty-state">Grade-level report totals will appear once reports are submitted by students with class details.</p>';
-        byId('overview-activity').innerHTML = data.recentActivity.length
-            ? data.recentActivity.map(item => `<li><strong>${escapeHtml(item.action)} · ${escapeHtml(item.reportTitle || `FI-${item.reportId}`)}</strong><p>${escapeHtml(item.details)}</p><small>${escapeHtml(item.actor || 'fixIt')} · ${formatDate(item.createdAt, true)}</small></li>`).join('')
-            : '<li class="empty-state">No report activity has been recorded yet.</li>';
+        byId('overview-grades').innerHTML = data.gradeFolders.length
+            ? data.gradeFolders.map(renderOverviewGradeFolder).join('')
+            : '<p class="empty-state">No Grade Levels are currently available. Add them in Settings.</p>';
+        const firstItem = data.totalReports ? (data.page - 1) * data.pageSize + 1 : 0;
+        const lastItem = Math.min(data.page * data.pageSize, data.totalReports);
+        const pagination = data.totalReports
+            ? `<div class="table-pagination"><span>Showing ${firstItem}–${lastItem} of ${data.totalReports}</span>
+                <div><button type="button" data-overview-page="${data.page - 1}" ${data.page <= 1 ? 'disabled' : ''}>Previous</button>
+                <span>Page ${data.page} of ${data.totalPages}</span>
+                <button type="button" data-overview-page="${data.page + 1}" ${data.page >= data.totalPages ? 'disabled' : ''}>Next</button></div></div>`
+            : '';
+        byId('overview-reports').innerHTML = data.reports.length
+            ? `${renderAdminReportTable(data.reports, true)}${pagination}`
+            : '<p class="empty-state">No reports have been submitted yet.</p>';
     }
 
     async function loadClassDirectory() {
@@ -709,20 +545,17 @@
         classes = directory.grades || [];
         const list = byId('class-options-list');
         if (list) {
-            const activeGrades = classes.filter(grade => grade.isActive);
-            list.innerHTML = activeGrades.length
-                ? `<div class="class-import-example" role="table" aria-label="Active class options">
-                    <div role="row"><strong role="columnheader">Grade Level</strong><strong role="columnheader">Section</strong></div>
-                    ${activeGrades.map(grade => {
-                        const sections = grade.sections.filter(section => section.isActive);
-                        return sections.length
-                            ? sections.map(section => `<div role="row"><span role="cell">${escapeHtml(grade.name)}</span><span role="cell">${escapeHtml(section.name)}</span></div>`).join('')
-                            : `<div role="row"><span role="cell">${escapeHtml(grade.name)}</span><span role="cell">No active sections</span></div>`;
-                    }).join('')}
-                </div>`
-                : emptyState('No active class options', 'Import a workbook or create a grade level and section to make class options available.');
+            list.innerHTML = classes.length
+                ? `<div class="class-option-directory">${classes.map(grade => `<section class="class-option-grade${grade.isActive ? '' : ' is-archived'}">
+                    <div class="class-option-grade-heading"><div><span class="eyebrow">GRADE LEVEL${grade.isActive ? '' : ' · ARCHIVED'}</span><h3>${escapeHtml(grade.name)}</h3></div>
+                        <div class="folder-card-menu">${folderMenu('grade', grade.id, grade.name, grade.isActive)}</div></div>
+                    <div class="class-option-sections">${grade.sections.length ? grade.sections.map(section => `<div class="class-option-section${section.isActive ? '' : ' is-archived'}">
+                        <span>${escapeHtml(section.name)}${section.isActive ? '' : ' · Archived'}</span>
+                        <div class="folder-card-menu">${folderMenu('section', section.id, section.name, section.isActive)}</div>
+                    </div>`).join('') : '<p class="class-options-help">No sections yet.</p>'}</div>
+                    </section>`).join('')}</div>`
+                : emptyState('No class options', 'Import a workbook or create a Grade Level and Section to make class options available.');
         }
-        await renderClassWorkspace();
         return classes;
     }
 
@@ -812,15 +645,23 @@
     async function showAdminPanel(name) {
         document.querySelectorAll('[data-panel]').forEach(panel => { panel.hidden = panel.dataset.panel !== name; });
         document.querySelectorAll('[data-view]').forEach(button => button.classList.toggle('is-active', button.dataset.view === name));
+        activeFolder = name;
         if (name === 'overview') await loadAdminOverview();
-        if (name === 'reports') await loadGradeFolders();
-        if (name === 'classes') await loadClassDirectory();
+        if (name === 'reports' && activeGradeId) await loadGradeReports();
+        if (name === 'settings') await loadClassDirectory();
     }
 
     async function loadAdmin() {
         await loadClassDirectory();
         updateIdentity();
         await showAdminPanel('overview');
+        if (adminRefreshTimer) window.clearInterval(adminRefreshTimer);
+        adminRefreshTimer = window.setInterval(() => {
+            const refresh = document.querySelector('[data-panel]:not([hidden])')?.dataset.panel === 'reports'
+                ? (activeGradeId ? loadGradeReports() : Promise.resolve())
+                : loadAdminOverview();
+            refresh.catch(error => showMessage(error.message, true));
+        }, 30000);
     }
 
     function setupAccountMenu() {
@@ -933,9 +774,7 @@
                 byId('image-preview').replaceChildren();
                 byId('report-dialog').close();
                 if (isAdmin) {
-                    if (activeFolder === 'grades') await loadGradeFolders();
-                    if (activeFolder === 'reports') await loadSectionReports();
-                    if (activeFolder === 'unassigned') await loadUnassignedReports();
+                    if (activeFolder === 'reports') await loadGradeReports();
                     await loadAdminOverview();
                     showMessage(`Report FI-${String(result.id).padStart(6, '0')} created.`);
                 } else {
@@ -985,73 +824,75 @@
         document.addEventListener('click', event => {
             const gradeLink = event.target.closest('[data-open-grade]');
             if (!gradeLink) return;
-            showAdminPanel('reports').then(async () => {
-                const grade = classes.find(item => item.name === gradeLink.dataset.openGrade);
-                if (grade) await loadSectionFolders(grade.id);
-            }).catch(error => showMessage(error.message, true));
+            activeGradeId = Number(gradeLink.dataset.openGrade);
+            gradeReportsPage = 1;
+            showAdminPanel('reports').catch(error => showMessage(error.message, true));
         });
         byId('folder-breadcrumbs').addEventListener('click', event => {
             const button = event.target.closest('[data-folder-level]');
             if (!button) return;
-            const action = button.dataset.folderLevel;
-            const work = action === 'grades' ? loadGradeFolders() : loadSectionFolders(activeGradeId);
-            work.catch(error => showMessage(error.message, true));
+            activeGradeId = null;
+            showAdminPanel('overview').catch(error => showMessage(error.message, true));
         });
-        byId('folder-content').addEventListener('click', event => {
+        byId('class-options-list').addEventListener('click', event => {
             const menuTrigger = event.target.closest('.folder-menu-trigger');
             if (menuTrigger) {
                 const menu = menuTrigger.nextElementSibling;
                 const opening = menu.hidden;
-                byId('folder-content').querySelectorAll('.folder-action-menu').forEach(item => { item.hidden = true; });
-                byId('folder-content').querySelectorAll('.folder-menu-trigger').forEach(item => item.setAttribute('aria-expanded', 'false'));
+                byId('class-options-list').querySelectorAll('.folder-action-menu').forEach(item => { item.hidden = true; });
+                byId('class-options-list').querySelectorAll('.folder-menu-trigger').forEach(item => item.setAttribute('aria-expanded', 'false'));
                 menu.hidden = !opening;
                 menuTrigger.setAttribute('aria-expanded', String(opening));
                 return;
             }
-            const archivedToggle = event.target.closest('[data-toggle-archived]');
-            if (archivedToggle) {
-                if (archivedToggle.dataset.toggleArchived === 'grades') {
-                    showArchivedGrades = !showArchivedGrades;
-                    loadGradeFolders().catch(error => showMessage(error.message, true));
-                } else {
-                    showArchivedSections = !showArchivedSections;
-                    loadSectionFolders(activeGradeId).catch(error => showMessage(error.message, true));
-                }
-                return;
-            }
             const manageButton = event.target.closest('[data-folder-manage]');
-            if (manageButton) {
+            if (manageButton)
                 prepareFolderManagement(manageButton).catch(error => showMessage(error.message, true));
-                return;
-            }
-            const button = event.target.closest('[data-folder-action]');
-            if (!button) return;
-            const action = button.dataset.folderAction;
-            const work = action === 'grade'
-                ? (showArchivedSections = false, loadSectionFolders(Number(button.dataset.folderId)))
-                : action === 'section'
-                    ? (activeSectionId = Number(button.dataset.folderId), loadSectionReports())
-                    : loadUnassignedReports();
-            work.catch(error => showMessage(error.message, true));
         });
-        ['folder-search', 'folder-status', 'folder-category', 'folder-sort'].forEach(id => {
+        ['folder-search', 'folder-status', 'folder-category', 'folder-section', 'folder-sort'].forEach(id => {
             const input = byId(id);
             input?.addEventListener(input.tagName === 'INPUT' ? 'input' : 'change', () => {
-                const work = activeFolder === 'reports'
-                    ? loadSectionReports()
-                    : activeFolder === 'unassigned'
-                        ? loadUnassignedReports()
-                        : null;
-                work?.catch(error => showMessage(error.message, true));
+                gradeReportsPage = 1;
+                if (activeFolder === 'reports')
+                    loadGradeReports().catch(error => showMessage(error.message, true));
             });
         });
         byId('folder-clear')?.addEventListener('click', () => {
             byId('folder-search').value = '';
             byId('folder-status').value = '';
             byId('folder-category').value = '';
+            byId('folder-section').value = '';
             byId('folder-sort').value = 'newest';
-            const work = activeFolder === 'unassigned' ? loadUnassignedReports() : loadSectionReports();
-            work.catch(error => showMessage(error.message, true));
+            gradeReportsPage = 1;
+            if (activeFolder === 'reports')
+                loadGradeReports().catch(error => showMessage(error.message, true));
+        });
+        document.addEventListener('click', event => {
+            const overviewPageButton = event.target.closest('[data-overview-page]');
+            if (overviewPageButton && !overviewPageButton.disabled) {
+                overviewPage = Number(overviewPageButton.dataset.overviewPage);
+                loadAdminOverview().catch(error => showMessage(error.message, true));
+                return;
+            }
+            const gradePageButton = event.target.closest('[data-grade-page]');
+            if (gradePageButton && !gradePageButton.disabled) {
+                gradeReportsPage = Number(gradePageButton.dataset.gradePage);
+                loadGradeReports().catch(error => showMessage(error.message, true));
+                return;
+            }
+            const reviewButton = event.target.closest('[data-mark-reviewed]');
+            if (!reviewButton) return;
+            reviewButton.disabled = true;
+            request(`/api/admin/reports/${reviewButton.dataset.markReviewed}/review`, { method: 'POST' })
+                .then(async result => {
+                    showMessage(result.message);
+                    await Promise.all([
+                        activeFolder === 'reports' ? loadGradeReports() : Promise.resolve(),
+                        loadAdminOverview()
+                    ]);
+                })
+                .catch(error => showMessage(error.message, true))
+                .finally(() => { reviewButton.disabled = false; });
         });
         byId('admin-report-form').addEventListener('submit', async event => {
             event.preventDefault();
@@ -1071,8 +912,7 @@
                 });
                 showMessage('Report updates saved.');
                 await openReport(activeReportId);
-                if (activeFolder === 'reports') await loadSectionReports();
-                if (activeFolder === 'unassigned') await loadUnassignedReports();
+                if (activeFolder === 'reports') await loadGradeReports();
                 await loadAdminOverview();
             } catch (error) {
                 byId('admin-report-error').textContent = error.message;
@@ -1088,8 +928,7 @@
                 await request(`/api/reports/${activeReportId}`, { method: 'DELETE' });
                 byId('report-details-dialog').close();
                 showMessage('Report deleted.');
-                if (activeFolder === 'reports') await loadSectionReports();
-                if (activeFolder === 'unassigned') await loadUnassignedReports();
+                if (activeFolder === 'reports') await loadGradeReports();
                 await loadAdminOverview();
             } catch (error) {
                 showMessage(error.message, true);

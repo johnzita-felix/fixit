@@ -20,6 +20,7 @@ var databasePath = Path.Combine(builder.Environment.ContentRootPath, "app.db");
 builder.Services.AddDbContext<AppDbContext>(options =>
     options.UseSqlite($"Data Source={databasePath}"));
 builder.Services.AddScoped<IPasswordHasher<AppUser>, PasswordHasher<AppUser>>();
+builder.Services.AddHostedService<ResolvedReportCleanupService>();
 
 builder.Services
     .AddAuthentication(CookieAuthenticationDefaults.AuthenticationScheme)
@@ -998,36 +999,52 @@ app.MapPost("/api/admin/class-options/import", async (
     return Results.Ok(new { message = "Class options imported. Existing student assignments and reports were preserved.", result });
 }).RequireAuthorization(policy => policy.RequireRole("admin"));
 
-app.MapGet("/api/admin/overview", async (AppDbContext db) =>
+app.MapGet("/api/admin/overview", async (
+    int? page,
+    int? pageSize,
+    AppDbContext db,
+    CancellationToken cancellationToken) =>
 {
     var statusCounts = await db.Reports.AsNoTracking()
         .GroupBy(report => report.Status)
         .Select(group => new { Status = group.Key, Count = group.Count() })
         .ToDictionaryAsync(item => item.Status, item => item.Count);
-    var reportsByGrade = await db.Reports.AsNoTracking()
-        .Join(db.Users.AsNoTracking(), report => report.UserId, user => user.Id,
-            (report, user) => new { report, user })
-        .Where(item => item.user.GradeLevelId != null && item.user.SectionId != null)
-        .Join(db.SchoolGrades.AsNoTracking(), item => item.user.GradeLevelId, grade => grade.Id,
-            (item, grade) => new { grade.Name, item.report.Id })
-        .GroupBy(item => item.Name)
-        .Select(group => new { GradeLevel = group.Key, ReportCount = group.Count() })
-        .OrderBy(item => item.GradeLevel)
-        .ToListAsync();
-    var recentActivity = await db.ReportActivities.AsNoTracking()
-        .OrderByDescending(activity => activity.CreatedAt)
-        .Take(6)
-        .Select(activity => new
+    var gradeFolders = await db.SchoolGrades.AsNoTracking()
+        .Where(grade => grade.IsActive)
+        .OrderBy(grade => grade.SortOrder).ThenBy(grade => grade.Name)
+        .Select(grade => new
         {
-            activity.ReportId,
-            activity.Action,
-            activity.Details,
-            activity.CreatedAt,
-            Actor = db.Users.Where(user => user.Id == activity.ActorUserId)
-                .Select(user => user.Username).FirstOrDefault(),
-            ReportTitle = db.Reports.Where(report => report.Id == activity.ReportId)
-                .Select(report => report.Title).FirstOrDefault()
-        }).ToListAsync();
+            grade.Id,
+            grade.Name,
+            ReportCount = db.Reports.Count(report => db.Users.Any(user =>
+                user.Id == report.UserId && user.GradeLevelId == grade.Id)),
+            UnreviewedCount = db.Reports.Count(report => !report.IsReviewed &&
+                db.Users.Any(user => user.Id == report.UserId && user.GradeLevelId == grade.Id))
+        }).ToListAsync(cancellationToken);
+    var query = db.Reports.AsNoTracking()
+        .Join(db.Users.AsNoTracking(), report => report.UserId, user => user.Id,
+            (report, user) => new { Report = report, User = user });
+    var totalReports = await query.CountAsync(cancellationToken);
+    var currentPageSize = Math.Clamp(pageSize ?? 10, 1, 50);
+    var currentPage = Math.Clamp(page ?? 1, 1, Math.Max(1, (int)Math.Ceiling(totalReports / (double)currentPageSize)));
+    var reportRows = await query.OrderByDescending(item => item.Report.CreatedAt)
+        .ThenByDescending(item => item.Report.Id)
+        .Skip((currentPage - 1) * currentPageSize)
+        .Take(currentPageSize)
+        .Select(item => new
+        {
+            item.Report.Id,
+            item.Report.Title,
+            item.Report.Category,
+            item.Report.Status,
+            item.Report.Priority,
+            item.Report.IsReviewed,
+            item.Report.CreatedAt,
+            GradeLevel = db.SchoolGrades.Where(grade => grade.Id == item.User.GradeLevelId)
+                .Select(grade => grade.Name).FirstOrDefault(),
+            Section = db.SchoolSections.Where(section => section.Id == item.User.SectionId)
+                .Select(section => section.Name).FirstOrDefault()
+        }).ToListAsync(cancellationToken);
     return Results.Ok(new
     {
         Total = statusCounts.Values.Sum(),
@@ -1038,9 +1055,13 @@ app.MapGet("/api/admin/overview", async (AppDbContext db) =>
         Rejected = statusCounts.GetValueOrDefault("Rejected"),
         UnassignedReports = await db.Reports.CountAsync(report =>
             db.Users.Any(user => user.Id == report.UserId &&
-                (user.GradeLevelId == null || user.SectionId == null))),
-        ReportsByGrade = reportsByGrade,
-        RecentActivity = recentActivity
+                (user.GradeLevelId == null || user.SectionId == null)), cancellationToken),
+        GradeFolders = gradeFolders,
+        Reports = reportRows,
+        Page = currentPage,
+        PageSize = currentPageSize,
+        TotalReports = totalReports,
+        TotalPages = Math.Max(1, (int)Math.Ceiling(totalReports / (double)currentPageSize))
     });
 }).RequireAuthorization(policy => policy.RequireRole("admin"));
 
@@ -1059,7 +1080,7 @@ app.MapGet("/api/admin/report-folders/grades", async (
             grade.IsActive,
             ReportCount = db.Reports.Count(report =>
                 db.Users.Any(user => user.Id == report.UserId && user.GradeLevelId == grade.Id)),
-            PendingReportCount = db.Reports.Count(report => report.Status == "Pending" &&
+            PendingReportCount = db.Reports.Count(report => !report.IsReviewed &&
                 db.Users.Any(user => user.Id == report.UserId && user.GradeLevelId == grade.Id)),
             UnassignedReportCount = db.Reports.Count(report =>
                 db.Users.Any(user => user.Id == report.UserId &&
@@ -1069,6 +1090,106 @@ app.MapGet("/api/admin/report-folders/grades", async (
                 (includeArchived == true || section.IsActive))
         }).ToListAsync(cancellationToken);
     return Results.Ok(grades);
+}).RequireAuthorization(policy => policy.RequireRole("admin"));
+
+app.MapGet("/api/admin/report-folders/grades/{gradeLevelId:int}/reports", async (
+    int gradeLevelId,
+    int? sectionId,
+    string? search,
+    string? status,
+    string? category,
+    string? sort,
+    int? page,
+    int? pageSize,
+    AppDbContext db,
+    CancellationToken cancellationToken) =>
+{
+    var grade = await db.SchoolGrades.AsNoTracking()
+        .SingleOrDefaultAsync(item => item.Id == gradeLevelId, cancellationToken);
+    if (grade is null)
+        return Results.NotFound(new { message = "Grade level not found." });
+    if (sectionId is not null && !await db.SchoolSections.AnyAsync(section =>
+            section.Id == sectionId && section.GradeLevelId == gradeLevelId, cancellationToken))
+        return Results.BadRequest(new { message = "Choose a section belonging to this grade level." });
+
+    var query = db.Reports.AsNoTracking()
+        .Join(db.Users.AsNoTracking(), report => report.UserId, user => user.Id,
+            (report, user) => new { Report = report, User = user })
+        .Where(item => item.User.GradeLevelId == gradeLevelId);
+    if (sectionId is not null)
+        query = query.Where(item => item.User.SectionId == sectionId);
+    if (!string.IsNullOrWhiteSpace(status))
+        query = query.Where(item => item.Report.Status == status);
+    if (!string.IsNullOrWhiteSpace(category))
+        query = query.Where(item => item.Report.Category == category);
+    if (!string.IsNullOrWhiteSpace(search))
+    {
+        var term = search.Trim();
+        query = query.Where(item =>
+            item.Report.Title.Contains(term) ||
+            item.Report.Location.Contains(term) ||
+            item.Report.Category.Contains(term) ||
+            item.Report.Description.Contains(term) ||
+            item.User.Username.Contains(term));
+    }
+
+    query = sort switch
+    {
+        "oldest" => query.OrderBy(item => item.Report.CreatedAt),
+        "severity-desc" => query.OrderBy(item => item.Report.Priority == "Critical" ? 0 :
+                item.Report.Priority == "High" ? 1 : item.Report.Priority == "Normal" ? 2 : 3)
+            .ThenByDescending(item => item.Report.CreatedAt),
+        "severity-asc" => query.OrderBy(item => item.Report.Priority == "Low" ? 0 :
+                item.Report.Priority == "Normal" ? 1 : item.Report.Priority == "High" ? 2 : 3)
+            .ThenByDescending(item => item.Report.CreatedAt),
+        "unresolved" => query.OrderBy(item => item.Report.Status == "Resolved" ? 1 : 0)
+            .ThenByDescending(item => item.Report.CreatedAt),
+        "resolved" => query.OrderBy(item => item.Report.Status == "Resolved" ? 0 : 1)
+            .ThenByDescending(item => item.Report.CreatedAt),
+        "recently-updated" => query.OrderByDescending(item => item.Report.UpdatedAt ?? item.Report.CreatedAt),
+        "oldest-updated" => query.OrderBy(item => item.Report.UpdatedAt ?? item.Report.CreatedAt),
+        _ => query.OrderByDescending(item => item.Report.CreatedAt).ThenByDescending(item => item.Report.Id)
+    };
+    var totalReports = await query.CountAsync(cancellationToken);
+    var currentPageSize = Math.Clamp(pageSize ?? 20, 1, 100);
+    var totalPages = Math.Max(1, (int)Math.Ceiling(totalReports / (double)currentPageSize));
+    var currentPage = Math.Clamp(page ?? 1, 1, totalPages);
+    var reportRows = await query.Skip((currentPage - 1) * currentPageSize)
+        .Take(currentPageSize)
+        .Select(item => new
+        {
+            item.Report.Id,
+            item.Report.Title,
+            item.Report.Description,
+            item.Report.Category,
+            item.Report.Location,
+            item.Report.Status,
+            item.Report.Priority,
+            item.Report.IsReviewed,
+            item.Report.Assignee,
+            item.Report.CreatedAt,
+            item.Report.UpdatedAt,
+            Reporter = item.User.Username,
+            Section = db.SchoolSections.Where(section => section.Id == item.User.SectionId)
+                .Select(section => section.Name).FirstOrDefault(),
+            HasPhoto = item.Report.Photo != null
+        }).ToListAsync(cancellationToken);
+
+    var sections = await db.SchoolSections.AsNoTracking()
+        .Where(section => section.GradeLevelId == gradeLevelId && section.IsActive)
+        .OrderBy(section => section.SortOrder).ThenBy(section => section.Name)
+        .Select(section => new { section.Id, section.Name })
+        .ToListAsync(cancellationToken);
+    return Results.Ok(new
+    {
+        gradeLevel = grade.Name,
+        sections,
+        reports = reportRows,
+        page = currentPage,
+        pageSize = currentPageSize,
+        totalReports,
+        totalPages
+    });
 }).RequireAuthorization(policy => policy.RequireRole("admin"));
 
 app.MapGet("/api/admin/report-folders/grades/{gradeLevelId:int}/sections", async (
@@ -1405,7 +1526,7 @@ app.MapPatch("/api/reports/{id:int}", async (
 
     var changes = new List<(string Action, string Details)>();
     var statuses = new[] { "Pending", "Acknowledged", "In Progress", "Resolved", "Rejected" };
-    var priorities = new[] { "Low", "Normal", "High" };
+    var priorities = new[] { "Low", "Normal", "High", "Critical" };
     if (request.Status is not null)
     {
         if (!statuses.Contains(request.Status, StringComparer.Ordinal))
@@ -1417,12 +1538,13 @@ app.MapPatch("/api/reports/{id:int}", async (
         {
             changes.Add(("Status changed", $"{report.Status} → {request.Status}"));
             report.Status = request.Status;
+            report.ResolvedAt = request.Status == "Resolved" ? DateTime.UtcNow : null;
         }
     }
     if (request.Priority is not null)
     {
         if (!priorities.Contains(request.Priority, StringComparer.Ordinal))
-            return Results.BadRequest(new { message = "Choose Low, Normal, or High priority." });
+            return Results.BadRequest(new { message = "Choose Low, Normal, High, or Critical priority." });
         if (report.Priority != request.Priority)
         {
             changes.Add(("Priority changed", $"{report.Priority} → {request.Priority}"));
@@ -1482,6 +1604,31 @@ app.MapPatch("/api/reports/{id:int}", async (
         });
     await db.SaveChangesAsync();
     return Results.Ok(new { message = "Report updated." });
+}).RequireAuthorization(policy => policy.RequireRole("admin"));
+
+app.MapPost("/api/admin/reports/{id:int}/review", async (
+    int id,
+    HttpContext context,
+    AppDbContext db,
+    CancellationToken cancellationToken) =>
+{
+    var report = await db.Reports.SingleOrDefaultAsync(item => item.Id == id, cancellationToken);
+    if (report is null)
+        return Results.NotFound(new { message = "Report not found." });
+    if (!report.IsReviewed)
+    {
+        report.IsReviewed = true;
+        report.UpdatedAt = DateTime.UtcNow;
+        db.ReportActivities.Add(new ReportActivity
+        {
+            ReportId = report.Id,
+            ActorUserId = int.Parse(context.User.FindFirstValue(ClaimTypes.NameIdentifier)!),
+            Action = "Marked reviewed",
+            Details = "Report marked as reviewed."
+        });
+        await db.SaveChangesAsync(cancellationToken);
+    }
+    return Results.Ok(new { message = "Report marked as reviewed." });
 }).RequireAuthorization(policy => policy.RequireRole("admin"));
 
 app.MapDelete("/api/reports/{id:int}", async (int id, AppDbContext db) =>
@@ -2055,13 +2202,31 @@ static async Task EnsureReportSchemaAsync(AppDbContext db)
                      ("PhotoContentType", "TEXT NULL"),
                      ("PublicUpdate", "TEXT NULL"),
                      ("Priority", "TEXT NOT NULL DEFAULT 'Normal'"),
-                     ("Assignee", "TEXT NULL")
+                     ("Assignee", "TEXT NULL"),
+                     ("IsReviewed", "INTEGER NOT NULL DEFAULT 0"),
+                     ("ResolvedAt", "TEXT NULL")
                  })
         {
             if (columns.Contains(name)) continue;
             await using var alter = connection.CreateCommand();
             alter.CommandText = $"ALTER TABLE \"Reports\" ADD COLUMN \"{name}\" {declaration};";
             await alter.ExecuteNonQueryAsync();
+            if (name == "IsReviewed")
+            {
+                await using var backfill = connection.CreateCommand();
+                backfill.CommandText = "UPDATE \"Reports\" SET \"IsReviewed\" = 1;";
+                await backfill.ExecuteNonQueryAsync();
+            }
+            if (name == "ResolvedAt")
+            {
+                await using var backfill = connection.CreateCommand();
+                backfill.CommandText = """
+                    UPDATE "Reports"
+                    SET "ResolvedAt" = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+                    WHERE "Status" IN ('Resolved', 'Closed', 'Fixed') AND "ResolvedAt" IS NULL;
+                    """;
+                await backfill.ExecuteNonQueryAsync();
+            }
         }
         await using var normalize = connection.CreateCommand();
         normalize.CommandText = """
@@ -2075,6 +2240,12 @@ static async Task EnsureReportSchemaAsync(AppDbContext db)
             WHERE "Status" IN ('New', 'Seen', 'In progress', 'Fixed', 'Closed');
             """;
         await normalize.ExecuteNonQueryAsync();
+        await using var resolvedIndex = connection.CreateCommand();
+        resolvedIndex.CommandText = """
+            CREATE INDEX IF NOT EXISTS "IX_Reports_Status_ResolvedAt"
+            ON "Reports" ("Status", "ResolvedAt");
+            """;
+        await resolvedIndex.ExecuteNonQueryAsync();
     }
     finally
     {
@@ -2356,11 +2527,13 @@ public class MaintenanceReport
     public string? PhotoContentType { get; set; }
     public string Status { get; set; } = "Pending";
     public string Priority { get; set; } = "Normal";
+    public bool IsReviewed { get; set; }
     public string? Assignee { get; set; }
     public string? PublicUpdate { get; set; }
     public string? AdminNotes { get; set; }
     public DateTime CreatedAt { get; set; }
     public DateTime? UpdatedAt { get; set; }
+    public DateTime? ResolvedAt { get; set; }
 }
 
 public class ReportActivity
@@ -2427,5 +2600,56 @@ public class AppDbContext(DbContextOptions<AppDbContext> options) : DbContext(op
         modelBuilder.Entity<MaintenanceReport>().ToTable("Reports");
         modelBuilder.Entity<ReportActivity>().ToTable("ReportActivities");
         modelBuilder.Entity<ReportNotification>().ToTable("ReportNotifications");
+    }
+}
+
+public sealed class ResolvedReportCleanupService(
+    IServiceScopeFactory scopeFactory,
+    ILogger<ResolvedReportCleanupService> logger) : BackgroundService
+{
+    private static readonly TimeSpan CleanupInterval = TimeSpan.FromMinutes(15);
+
+    protected override async Task ExecuteAsync(CancellationToken stoppingToken)
+    {
+        while (!stoppingToken.IsCancellationRequested)
+        {
+            try
+            {
+                await DeleteExpiredReportsAsync(stoppingToken);
+            }
+            catch (SqliteException exception) when (!stoppingToken.IsCancellationRequested)
+            {
+                logger.LogError(exception, "Could not query expired reports during scheduled cleanup.");
+            }
+            await Task.Delay(CleanupInterval, stoppingToken);
+        }
+    }
+
+    private async Task DeleteExpiredReportsAsync(CancellationToken cancellationToken)
+    {
+        using var scope = scopeFactory.CreateScope();
+        var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
+        var cutoff = DateTime.UtcNow.AddHours(-72);
+        var expiredReports = await db.Reports
+            .Where(report => report.Status == "Resolved" && report.ResolvedAt != null && report.ResolvedAt <= cutoff)
+            .ToListAsync(cancellationToken);
+
+        foreach (var report in expiredReports)
+        {
+            try
+            {
+                await using var transaction = await db.Database.BeginTransactionAsync(cancellationToken);
+                db.ReportActivities.RemoveRange(db.ReportActivities.Where(item => item.ReportId == report.Id));
+                db.ReportNotifications.RemoveRange(db.ReportNotifications.Where(item => item.ReportId == report.Id));
+                db.Reports.Remove(report);
+                await db.SaveChangesAsync(cancellationToken);
+                await transaction.CommitAsync(cancellationToken);
+            }
+            catch (Exception exception) when (exception is DbUpdateException or SqliteException)
+            {
+                logger.LogError(exception, "Could not delete resolved report {ReportId} during scheduled cleanup.", report.Id);
+                db.ChangeTracker.Clear();
+            }
+        }
     }
 }
