@@ -120,7 +120,7 @@ app.MapPost("/api/register", async (
     IConfiguration config,
     CancellationToken cancellationToken) =>
 {
-    var username = request.Username?.Trim();
+    var username = NormalizePersonName(request.Username);
     var email = NormalizeEmail(request.Email);
     var password = request.Password;
 
@@ -129,6 +129,8 @@ app.MapPost("/api/register", async (
         string.IsNullOrWhiteSpace(password))
         return Results.BadRequest(new { message = "Name, email, and password are required." });
 
+    if (username is null || !IsValidPersonName(username))
+        return Results.BadRequest(new { message = "Name may contain letters, spaces, hyphens, and apostrophes only." });
     if (username.Length < 3 || username.Length > 50)
         return Results.BadRequest(new { message = "Name must contain 3–50 characters." });
 
@@ -668,7 +670,8 @@ app.MapPost("/api/admin/class-options/grades", async (
     var name = NormalizeClassFolderName(request.Name, 40);
     if (name is null)
         return Results.BadRequest(new { message = "Grade level names are required and limited to 40 characters." });
-    if (await db.SchoolGrades.AnyAsync(grade => grade.Name == name, cancellationToken))
+    var gradeNames = await db.SchoolGrades.AsNoTracking().Select(grade => grade.Name).ToListAsync(cancellationToken);
+    if (gradeNames.Any(existing => ClassNameKey(existing) == ClassNameKey(name)))
         return Results.Conflict(new { message = "A grade level with that name already exists." });
 
     var grade = new SchoolGrade
@@ -692,7 +695,9 @@ app.MapPut("/api/admin/class-options/grades/{gradeLevelId:int}", async (
     var name = NormalizeClassFolderName(request.Name, 40);
     if (name is null)
         return Results.BadRequest(new { message = "Grade level names are required and limited to 40 characters." });
-    if (await db.SchoolGrades.AnyAsync(item => item.Id != gradeLevelId && item.Name == name, cancellationToken))
+    var otherGradeNames = await db.SchoolGrades.AsNoTracking()
+        .Where(item => item.Id != gradeLevelId).Select(item => item.Name).ToListAsync(cancellationToken);
+    if (otherGradeNames.Any(existing => ClassNameKey(existing) == ClassNameKey(name)))
         return Results.Conflict(new { message = "A grade level with that name already exists." });
     grade.Name = name;
     await db.SaveChangesAsync(cancellationToken);
@@ -797,8 +802,10 @@ app.MapPost("/api/admin/class-options/grades/{gradeLevelId:int}/sections", async
     var name = NormalizeClassFolderName(request.Name, 80);
     if (name is null)
         return Results.BadRequest(new { message = "Section names are required and limited to 80 characters." });
-    if (await db.SchoolSections.AnyAsync(section =>
-            section.GradeLevelId == gradeLevelId && section.Name == name, cancellationToken))
+    var sectionNames = await db.SchoolSections.AsNoTracking()
+        .Where(section => section.GradeLevelId == gradeLevelId)
+        .Select(section => section.Name).ToListAsync(cancellationToken);
+    if (sectionNames.Any(existing => ClassNameKey(existing) == ClassNameKey(name)))
         return Results.Conflict(new { message = "A section with that name already exists in this grade level." });
 
     var section = new SchoolSection
@@ -824,8 +831,10 @@ app.MapPut("/api/admin/class-options/sections/{sectionId:int}", async (
     var name = NormalizeClassFolderName(request.Name, 80);
     if (name is null)
         return Results.BadRequest(new { message = "Section names are required and limited to 80 characters." });
-    if (await db.SchoolSections.AnyAsync(item =>
-            item.Id != sectionId && item.GradeLevelId == section.GradeLevelId && item.Name == name, cancellationToken))
+    var otherSectionNames = await db.SchoolSections.AsNoTracking()
+        .Where(item => item.Id != sectionId && item.GradeLevelId == section.GradeLevelId)
+        .Select(item => item.Name).ToListAsync(cancellationToken);
+    if (otherSectionNames.Any(existing => ClassNameKey(existing) == ClassNameKey(name)))
         return Results.Conflict(new { message = "A section with that name already exists in this grade level." });
     section.Name = name;
     await db.SaveChangesAsync(cancellationToken);
@@ -1035,11 +1044,13 @@ app.MapGet("/api/admin/overview", async (
         {
             item.Report.Id,
             item.Report.Title,
+            item.Report.Description,
             item.Report.Category,
             item.Report.Status,
             item.Report.Priority,
             item.Report.IsReviewed,
             item.Report.CreatedAt,
+            Reporter = item.User.Username,
             GradeLevel = db.SchoolGrades.Where(grade => grade.Id == item.User.GradeLevelId)
                 .Select(grade => grade.Name).FirstOrDefault(),
             Section = db.SchoolSections.Where(section => section.Id == item.User.SectionId)
@@ -1108,9 +1119,27 @@ app.MapGet("/api/admin/report-folders/grades/{gradeLevelId:int}/reports", async 
         .SingleOrDefaultAsync(item => item.Id == gradeLevelId, cancellationToken);
     if (grade is null)
         return Results.NotFound(new { message = "Grade level not found." });
+    var supportedStatuses = new[] { "Pending", "Acknowledged", "In Progress", "Resolved", "Rejected" };
+    var supportedCategories = new[] { "General", "Electrical", "Plumbing", "Cleaning", "Furniture", "Safety", "Other" };
+    var supportedSorts = new[]
+    {
+        "newest", "oldest", "severity-desc", "severity-asc", "unresolved", "resolved",
+        "recently-updated", "oldest-updated"
+    };
+    if (!string.IsNullOrWhiteSpace(status) && !supportedStatuses.Contains(status, StringComparer.Ordinal))
+        return Results.BadRequest(new { message = "Choose a valid report status filter." });
+    if (!string.IsNullOrWhiteSpace(category) && !supportedCategories.Contains(category, StringComparer.Ordinal))
+        return Results.BadRequest(new { message = "Choose a valid report category filter." });
+    if (!string.IsNullOrWhiteSpace(sort) && !supportedSorts.Contains(sort, StringComparer.Ordinal))
+        return Results.BadRequest(new { message = "Choose a valid report sort order." });
+    var sections = await db.SchoolSections.AsNoTracking()
+        .Where(section => section.GradeLevelId == gradeLevelId && section.IsActive)
+        .OrderBy(section => section.SortOrder).ThenBy(section => section.Name)
+        .Select(section => new { section.Id, section.Name })
+        .ToListAsync(cancellationToken);
     if (sectionId is not null && !await db.SchoolSections.AnyAsync(section =>
-            section.Id == sectionId && section.GradeLevelId == gradeLevelId, cancellationToken))
-        return Results.BadRequest(new { message = "Choose a section belonging to this grade level." });
+            section.Id == sectionId && section.GradeLevelId == gradeLevelId && section.IsActive, cancellationToken))
+        return Results.BadRequest(new { message = "Choose an active section belonging to this grade level." });
 
     var query = db.Reports.AsNoTracking()
         .Join(db.Users.AsNoTracking(), report => report.UserId, user => user.Id,
@@ -1175,11 +1204,6 @@ app.MapGet("/api/admin/report-folders/grades/{gradeLevelId:int}/reports", async 
             HasPhoto = item.Report.Photo != null
         }).ToListAsync(cancellationToken);
 
-    var sections = await db.SchoolSections.AsNoTracking()
-        .Where(section => section.GradeLevelId == gradeLevelId && section.IsActive)
-        .OrderBy(section => section.SortOrder).ThenBy(section => section.Name)
-        .Select(section => new { section.Id, section.Name })
-        .ToListAsync(cancellationToken);
     return Results.Ok(new
     {
         gradeLevel = grade.Name,
@@ -1697,8 +1721,10 @@ app.MapPost("/api/profile", async (
     HttpContext context,
     AppDbContext db) =>
 {
-    var name = request.Username?.Trim();
-    if (string.IsNullOrWhiteSpace(name) || name.Length < 3 || name.Length > 50)
+    var name = NormalizePersonName(request.Username);
+    if (name is null || !IsValidPersonName(name))
+        return Results.BadRequest(new { message = "Name may contain letters, spaces, hyphens, and apostrophes only." });
+    if (name.Length < 3 || name.Length > 50)
         return Results.BadRequest(new { message = "Name must contain 3–50 characters." });
     var userId = int.Parse(context.User.FindFirstValue(ClaimTypes.NameIdentifier)!);
     if (await db.Users.AnyAsync(user => user.Id != userId && user.Username == name))
@@ -1721,6 +1747,24 @@ app.Run();
 
 static string? NormalizeEmail(string? email) =>
     string.IsNullOrWhiteSpace(email) ? null : email.Trim().ToLowerInvariant();
+
+static string? NormalizePersonName(string? name)
+{
+    if (string.IsNullOrWhiteSpace(name)) return null;
+    return string.Join(" ", name.Trim().Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries));
+}
+
+static bool IsValidPersonName(string name)
+{
+    if (string.IsNullOrWhiteSpace(name)) return false;
+    foreach (var character in name)
+    {
+        if (!char.IsLetter(character) && !char.IsWhiteSpace(character) &&
+            character != '-' && character != '\'' && character != '\u2019')
+            return false;
+    }
+    return true;
+}
 
 static bool IsValidEmail(string email)
 {
@@ -1857,8 +1901,8 @@ static ClassOptionsValidation ValidateClassOptionRows(IReadOnlyCollection<ClassO
             errors.Add($"Entry {rowNumber}: the row is empty.");
             continue;
         }
-        var grade = row.GradeLevel?.Trim() ?? "";
-        var section = row.Section?.Trim() ?? "";
+        var grade = NormalizeClassOptionName(row.GradeLevel ?? "");
+        var section = NormalizeClassOptionName(row.Section ?? "");
         if (grade.Length == 0 || section.Length == 0)
         {
             errors.Add($"Entry {rowNumber}: both Grade Level and Section are required.");
@@ -1887,7 +1931,7 @@ static ClassOptionsValidation ValidateClassOptionRows(IReadOnlyCollection<ClassO
 
 static string? NormalizeClassFolderName(string? value, int maxLength)
 {
-    var name = value?.Trim();
+    var name = value is null ? null : NormalizeClassOptionName(value);
     return string.IsNullOrWhiteSpace(name) ||
            name.Length > maxLength ||
            name.Any(char.IsControl)
@@ -1895,63 +1939,93 @@ static string? NormalizeClassFolderName(string? value, int maxLength)
         : name;
 }
 
+static string NormalizeClassOptionName(string value) =>
+    string.Join(" ", value.Normalize(NormalizationForm.FormKC)
+        .Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries));
+
+static string ClassNameKey(string name) =>
+    NormalizeClassOptionName(name).ToUpperInvariant();
+
 static async Task<ClassOptionsPreview> BuildClassOptionsPreviewAsync(
     AppDbContext db,
     IReadOnlyList<ClassOptionImportRow> rows)
 {
     var currentGrades = await db.SchoolGrades.AsNoTracking().ToListAsync();
     var currentSections = await db.SchoolSections.AsNoTracking().ToListAsync();
+    var dependencies = await GetClassOptionDependenciesAsync(db, currentGrades, currentSections);
     var snapshot = BuildClassOptionsSnapshot(currentGrades, currentSections);
-    var importedGrades = rows.Select(row => row.GradeLevel)
-        .Distinct(StringComparer.OrdinalIgnoreCase).ToList();
-    var importedSections = rows.Select(row => new ClassOptionEntry(row.GradeLevel, row.Section)).ToList();
-    var importedSectionKeys = importedSections
-        .Select(item => ClassOptionKey(item.GradeLevel, item.Section))
-        .ToHashSet(StringComparer.OrdinalIgnoreCase);
+    var importedGradeNames = rows.Select(row => row.GradeLevel)
+        .GroupBy(ClassNameKey, StringComparer.OrdinalIgnoreCase)
+        .Select(group => group.First()).ToList();
+    var gradeByKey = new Dictionary<string, SchoolGrade?>(StringComparer.OrdinalIgnoreCase);
+    foreach (var name in importedGradeNames)
+        gradeByKey[ClassNameKey(name)] = FindGradeMatch(currentGrades, name);
 
-    var gradesToAdd = importedGrades.Where(name =>
-        currentGrades.All(grade => !string.Equals(grade.Name, name, StringComparison.OrdinalIgnoreCase))).ToList();
-    var gradesToRestore = importedGrades.Where(name =>
-        currentGrades.Any(grade => !grade.IsActive &&
-            string.Equals(grade.Name, name, StringComparison.OrdinalIgnoreCase))).ToList();
-    var gradesToRemove = currentGrades.Where(grade => grade.IsActive &&
-        !importedGrades.Contains(grade.Name, StringComparer.OrdinalIgnoreCase))
-        .Select(grade => grade.Name).ToList();
+    var selectedGradeIds = gradeByKey.Values.Where(grade => grade is not null)
+        .Select(grade => grade!.Id).ToHashSet();
+    var gradesToAdd = importedGradeNames.Where(name => gradeByKey[ClassNameKey(name)] is null).ToList();
+    var gradesToRestore = new List<string>();
+    var gradesToRetain = new List<string>();
+    var gradesToUpdate = new List<ClassOptionUpdate>();
+    foreach (var name in importedGradeNames)
+    {
+        var grade = gradeByKey[ClassNameKey(name)];
+        if (grade is null) continue;
+        if (!grade.IsActive) gradesToRestore.Add(name);
+        if (!string.Equals(grade.Name, name, StringComparison.Ordinal))
+            gradesToUpdate.Add(new ClassOptionUpdate(null, grade.Name, name));
+        else if (grade.IsActive)
+            gradesToRetain.Add(name);
+    }
 
-    var sectionsToAdd = importedSections.Where(item =>
-        currentSections.All(section =>
-            !string.Equals(section.Name, item.Section, StringComparison.OrdinalIgnoreCase) ||
-            !string.Equals(currentGrades.Single(grade => grade.Id == section.GradeLevelId).Name,
-                item.GradeLevel, StringComparison.OrdinalIgnoreCase)))
-        .Where(item => !currentSections.Any(section =>
-            !section.IsActive &&
-            string.Equals(section.Name, item.Section, StringComparison.OrdinalIgnoreCase) &&
-            string.Equals(currentGrades.Single(grade => grade.Id == section.GradeLevelId).Name,
-                item.GradeLevel, StringComparison.OrdinalIgnoreCase)))
-        .ToList();
-    var sectionsToRestore = importedSections.Where(item => currentSections.Any(section =>
-        !section.IsActive &&
-        string.Equals(section.Name, item.Section, StringComparison.OrdinalIgnoreCase) &&
-        string.Equals(currentGrades.Single(grade => grade.Id == section.GradeLevelId).Name,
-            item.GradeLevel, StringComparison.OrdinalIgnoreCase))).ToList();
-    var sectionsToRemove = currentSections.Where(section => section.IsActive &&
-        !importedSectionKeys.Contains(ClassOptionKey(
-            currentGrades.Single(grade => grade.Id == section.GradeLevelId).Name, section.Name)))
-        .Select(section => new ClassOptionEntry(
-            currentGrades.Single(grade => grade.Id == section.GradeLevelId).Name, section.Name))
-        .ToList();
-    var unchangedSections = importedSections.Count - sectionsToAdd.Count - sectionsToRestore.Count;
+    var selectedSectionIds = new HashSet<int>();
+    var sectionsToAdd = new List<ClassOptionEntry>();
+    var sectionsToRestore = new List<ClassOptionEntry>();
+    var sectionsToRetain = new List<ClassOptionEntry>();
+    var sectionsToUpdate = new List<ClassOptionUpdate>();
+    foreach (var row in rows)
+    {
+        var grade = gradeByKey[ClassNameKey(row.GradeLevel)];
+        var match = grade is null ? null : FindSectionMatch(currentSections, grade.Id, row.Section);
+        if (match is null)
+        {
+            sectionsToAdd.Add(new ClassOptionEntry(row.GradeLevel, row.Section));
+            continue;
+        }
 
-    return new ClassOptionsPreview(
-        rows,
-        gradesToAdd,
-        gradesToRestore,
-        gradesToRemove,
-        sectionsToAdd,
-        sectionsToRestore,
-        sectionsToRemove,
-        unchangedSections,
-        snapshot);
+        selectedSectionIds.Add(match.Id);
+        if (!match.IsActive)
+            sectionsToRestore.Add(new ClassOptionEntry(row.GradeLevel, row.Section));
+        if (!string.Equals(match.Name, row.Section, StringComparison.Ordinal))
+            sectionsToUpdate.Add(new ClassOptionUpdate(match.Name, row.Section, row.GradeLevel));
+        else if (match.IsActive)
+            sectionsToRetain.Add(new ClassOptionEntry(row.GradeLevel, row.Section));
+    }
+
+    var gradesToDelete = new List<ClassOptionRemoval>();
+    var gradesToArchive = new List<ClassOptionRemoval>();
+    foreach (var grade in currentGrades.Where(item => item.IsActive && !selectedGradeIds.Contains(item.Id)))
+    {
+        var dependency = dependencies.Grades[grade.Id];
+        var removal = new ClassOptionRemoval(grade.Name, grade.Name, dependency.StudentCount, dependency.ReportCount);
+        (dependency.HasDependencies ? gradesToArchive : gradesToDelete).Add(removal);
+    }
+
+    var sectionParentById = currentGrades.ToDictionary(grade => grade.Id);
+    var sectionsToDelete = new List<ClassOptionRemoval>();
+    var sectionsToArchive = new List<ClassOptionRemoval>();
+    foreach (var section in currentSections.Where(item => item.IsActive && !selectedSectionIds.Contains(item.Id)))
+    {
+        var dependency = dependencies.Sections[section.Id];
+        var removal = new ClassOptionRemoval(
+            sectionParentById[section.GradeLevelId].Name, section.Name,
+            dependency.StudentCount, dependency.ReportCount);
+        (dependency.HasDependencies ? sectionsToArchive : sectionsToDelete).Add(removal);
+    }
+
+    return new ClassOptionsPreview(rows, gradesToAdd, gradesToRestore, gradesToUpdate, gradesToRetain,
+        gradesToDelete, gradesToArchive, sectionsToAdd, sectionsToRestore, sectionsToUpdate, sectionsToRetain,
+        sectionsToDelete, sectionsToArchive, snapshot);
 }
 
 static async Task<ClassOptionsImportResult> ApplyClassOptionsAsync(
@@ -1960,22 +2034,26 @@ static async Task<ClassOptionsImportResult> ApplyClassOptionsAsync(
 {
     var grades = await db.SchoolGrades.ToListAsync();
     var sections = await db.SchoolSections.ToListAsync();
+    var dependencies = await GetClassOptionDependenciesAsync(db, grades, sections);
     var gradeNames = rows.Select(row => row.GradeLevel)
-        .Distinct(StringComparer.OrdinalIgnoreCase).ToList();
-    var sectionKeys = rows.Select(row => ClassOptionKey(row.GradeLevel, row.Section))
-        .ToHashSet(StringComparer.OrdinalIgnoreCase);
+        .GroupBy(ClassNameKey, StringComparer.OrdinalIgnoreCase)
+        .Select(group => group.First()).ToList();
     var addedGrades = 0;
     var addedSections = 0;
     var restoredGrades = 0;
     var restoredSections = 0;
-    var removedGrades = 0;
-    var removedSections = 0;
+    var deletedGrades = 0;
+    var archivedGrades = 0;
+    var deletedSections = 0;
+    var archivedSections = 0;
+    var targetGrades = new Dictionary<string, SchoolGrade>(StringComparer.OrdinalIgnoreCase);
+    var selectedGradeIds = new HashSet<int>();
 
     for (var index = 0; index < gradeNames.Count; index++)
     {
         var name = gradeNames[index];
-        var grade = grades.SingleOrDefault(item =>
-            string.Equals(item.Name, name, StringComparison.OrdinalIgnoreCase));
+        var key = ClassNameKey(name);
+        var grade = FindGradeMatch(grades, name);
         if (grade is null)
         {
             grade = new SchoolGrade { Name = name };
@@ -1990,26 +2068,21 @@ static async Task<ClassOptionsImportResult> ApplyClassOptionsAsync(
         grade.Name = name;
         grade.IsActive = true;
         grade.SortOrder = index + 1;
-    }
-
-    foreach (var grade in grades.Where(item => item.IsActive &&
-                 !gradeNames.Contains(item.Name, StringComparer.OrdinalIgnoreCase)))
-    {
-        grade.IsActive = false;
-        removedGrades++;
+        targetGrades.Add(key, grade);
+        selectedGradeIds.Add(grade.Id);
     }
 
     await db.SaveChangesAsync();
+    selectedGradeIds.Clear();
+    selectedGradeIds.UnionWith(targetGrades.Values.Select(grade => grade.Id));
 
     var sectionOrderByGrade = new Dictionary<int, int>();
+    var selectedSections = new List<SchoolSection>();
     foreach (var row in rows)
     {
-        var grade = grades.Single(item =>
-            string.Equals(item.Name, row.GradeLevel, StringComparison.OrdinalIgnoreCase));
+        var grade = targetGrades[ClassNameKey(row.GradeLevel)];
         sectionOrderByGrade.TryGetValue(grade.Id, out var currentOrder);
-        var section = sections.SingleOrDefault(item =>
-            item.GradeLevelId == grade.Id &&
-            string.Equals(item.Name, row.Section, StringComparison.OrdinalIgnoreCase));
+        var section = FindSectionMatch(sections, grade.Id, row.Section);
         if (section is null)
         {
             section = new SchoolSection { GradeLevelId = grade.Id, Name = row.Section };
@@ -2025,33 +2098,115 @@ static async Task<ClassOptionsImportResult> ApplyClassOptionsAsync(
         section.IsActive = true;
         section.SortOrder = ++currentOrder;
         sectionOrderByGrade[grade.Id] = currentOrder;
-    }
-
-    foreach (var section in sections.Where(item => item.IsActive &&
-                 !sectionKeys.Contains(ClassOptionKey(
-                     grades.Single(grade => grade.Id == item.GradeLevelId).Name, item.Name))))
-    {
-        section.IsActive = false;
-        removedSections++;
+        selectedSections.Add(section);
     }
 
     await db.SaveChangesAsync();
-    return new ClassOptionsImportResult(
-        addedGrades, restoredGrades, removedGrades,
-        addedSections, restoredSections, removedSections);
+    var selectedSectionIds = selectedSections.Select(section => section.Id).ToHashSet();
+
+    foreach (var section in sections.Where(item => item.IsActive && !selectedSectionIds.Contains(item.Id)).ToList())
+    {
+        if (dependencies.Sections[section.Id].HasDependencies)
+        {
+            section.IsActive = false;
+            archivedSections++;
+        }
+        else
+        {
+            db.SchoolSections.Remove(section);
+            sections.Remove(section);
+            deletedSections++;
+        }
+    }
+
+    await db.SaveChangesAsync();
+    foreach (var grade in grades.Where(item => item.IsActive && !selectedGradeIds.Contains(item.Id)).ToList())
+    {
+        if (dependencies.Grades[grade.Id].HasDependencies)
+        {
+            grade.IsActive = false;
+            archivedGrades++;
+        }
+        else
+        {
+            foreach (var section in sections.Where(item => item.GradeLevelId == grade.Id).ToList())
+            {
+                db.SchoolSections.Remove(section);
+                sections.Remove(section);
+                deletedSections++;
+            }
+            db.SchoolGrades.Remove(grade);
+            grades.Remove(grade);
+            deletedGrades++;
+        }
+    }
+
+    await db.SaveChangesAsync();
+    return new ClassOptionsImportResult(addedGrades, restoredGrades, deletedGrades, archivedGrades,
+        addedSections, restoredSections, deletedSections, archivedSections);
 }
 
 static string ClassOptionKey(string grade, string section) =>
-    $"{grade.Trim().ToUpperInvariant()}\u001f{section.Trim().ToUpperInvariant()}";
+    $"{ClassNameKey(grade)}\u001f{ClassNameKey(section)}";
+
+static SchoolGrade? FindGradeMatch(IEnumerable<SchoolGrade> grades, string name) =>
+    grades.Where(grade => ClassNameKey(grade.Name) == ClassNameKey(name))
+        .OrderBy(grade => string.Equals(grade.Name, name, StringComparison.Ordinal) ? 0 : 1)
+        .ThenBy(grade => grade.IsActive ? 0 : 1)
+        .ThenBy(grade => grade.Id)
+        .FirstOrDefault();
+
+static SchoolSection? FindSectionMatch(IEnumerable<SchoolSection> sections, int gradeLevelId, string name) =>
+    sections.Where(section => section.GradeLevelId == gradeLevelId &&
+            ClassNameKey(section.Name) == ClassNameKey(name))
+        .OrderBy(section => string.Equals(section.Name, name, StringComparison.Ordinal) ? 0 : 1)
+        .ThenBy(section => section.IsActive ? 0 : 1)
+        .ThenBy(section => section.Id)
+        .FirstOrDefault();
+
+static async Task<(Dictionary<int, ClassOptionDependency> Grades, Dictionary<int, ClassOptionDependency> Sections)>
+    GetClassOptionDependenciesAsync(
+        AppDbContext db,
+        IReadOnlyCollection<SchoolGrade> grades,
+        IReadOnlyCollection<SchoolSection> sections)
+{
+    var assignments = await db.Users.AsNoTracking()
+        .Select(user => new { user.Id, user.GradeLevelId, user.SectionId })
+        .ToListAsync();
+    var reportCounts = await db.Reports.AsNoTracking()
+        .GroupBy(report => report.UserId)
+        .Select(group => new { UserId = group.Key, Count = group.Count() })
+        .ToDictionaryAsync(item => item.UserId, item => item.Count);
+    var sectionsByGrade = sections.GroupBy(section => section.GradeLevelId)
+        .ToDictionary(group => group.Key, group => group.Select(section => section.Id).ToHashSet());
+    var sectionDependencies = sections.ToDictionary(section => section.Id, section =>
+    {
+        var assignedUsers = assignments.Where(user => user.SectionId == section.Id).ToList();
+        return new ClassOptionDependency(
+            assignedUsers.Count,
+            assignedUsers.Sum(user => reportCounts.GetValueOrDefault(user.Id)));
+    });
+    var gradeDependencies = grades.ToDictionary(grade => grade.Id, grade =>
+    {
+        var sectionIds = sectionsByGrade.GetValueOrDefault(grade.Id) ?? [];
+        var assignedUsers = assignments.Where(user =>
+            user.GradeLevelId == grade.Id ||
+            (user.SectionId is int sectionId && sectionIds.Contains(sectionId))).ToList();
+        return new ClassOptionDependency(
+            assignedUsers.Count,
+            assignedUsers.Sum(user => reportCounts.GetValueOrDefault(user.Id)));
+    });
+    return (gradeDependencies, sectionDependencies);
+}
 
 static string BuildClassOptionsSnapshot(
     IEnumerable<SchoolGrade> grades,
     IEnumerable<SchoolSection> sections)
 {
     var gradeNames = grades.ToDictionary(grade => grade.Id, grade => grade.Name);
-    var current = grades.Select(grade => $"G|{grade.Name}|{grade.IsActive}")
+    var current = grades.Select(grade => $"G|{grade.Id}|{ClassNameKey(grade.Name)}|{grade.Name}|{grade.IsActive}")
         .Concat(sections.Select(section =>
-            $"S|{gradeNames[section.GradeLevelId]}|{section.Name}|{section.IsActive}"))
+            $"S|{section.Id}|{section.GradeLevelId}|{ClassNameKey(gradeNames[section.GradeLevelId])}|{ClassNameKey(section.Name)}|{section.Name}|{section.IsActive}"))
         .OrderBy(item => item, StringComparer.OrdinalIgnoreCase);
     return Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(string.Join('\n', current))));
 }
@@ -2405,20 +2560,33 @@ public record ClassOptionsPreview(
     IReadOnlyList<ClassOptionImportRow> Rows,
     IReadOnlyList<string> GradesToAdd,
     IReadOnlyList<string> GradesToRestore,
-    IReadOnlyList<string> GradesToRemove,
+    IReadOnlyList<ClassOptionUpdate> GradesToUpdate,
+    IReadOnlyList<string> GradesToRetain,
+    IReadOnlyList<ClassOptionRemoval> GradesToDelete,
+    IReadOnlyList<ClassOptionRemoval> GradesToArchive,
     IReadOnlyList<ClassOptionEntry> SectionsToAdd,
     IReadOnlyList<ClassOptionEntry> SectionsToRestore,
-    IReadOnlyList<ClassOptionEntry> SectionsToRemove,
-    int UnchangedSections,
+    IReadOnlyList<ClassOptionUpdate> SectionsToUpdate,
+    IReadOnlyList<ClassOptionEntry> SectionsToRetain,
+    IReadOnlyList<ClassOptionRemoval> SectionsToDelete,
+    IReadOnlyList<ClassOptionRemoval> SectionsToArchive,
     string Snapshot);
 public record ClassOptionsValidation(List<ClassOptionImportRow> Rows, List<string> Errors);
+public record ClassOptionUpdate(string? GradeLevel, string CurrentName, string Name);
+public record ClassOptionRemoval(string GradeLevel, string Name, int StudentCount, int ReportCount);
+public record ClassOptionDependency(int StudentCount, int ReportCount)
+{
+    public bool HasDependencies => StudentCount > 0 || ReportCount > 0;
+}
 public record ClassOptionsImportResult(
     int GradesAdded,
     int GradesRestored,
-    int GradesDeactivated,
+    int GradesDeleted,
+    int GradesArchived,
     int SectionsAdded,
     int SectionsRestored,
-    int SectionsDeactivated);
+    int SectionsDeleted,
+    int SectionsArchived);
 
 public sealed class ClassOptionsImportException(string message, IReadOnlyList<string>? errors = null)
     : Exception(message)

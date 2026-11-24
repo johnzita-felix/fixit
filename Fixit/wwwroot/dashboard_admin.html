@@ -34,8 +34,7 @@
         <nav class="admin-nav" aria-label="Administrator navigation">
             <p class="nav-caption">WORKSPACE</p>
             <button class="admin-nav-link is-active" type="button" data-view="overview"><span aria-hidden="true">◫</span> Overview</button>
-            <button class="admin-nav-link" type="button" data-view="settings"><span aria-hidden="true">⚙</span> Settings</button>
-            <div class="nav-school-note"><span class="school-monogram small-monogram" aria-hidden="true">LI</span><span>LIFE Institute<br><small>Mariveles</small></span></div>
+            <button class="admin-nav-link" type="button" data-view="classes"><span aria-hidden="true">▦</span> Class Management</button>
         </nav>
 
         <main class="admin-main">
@@ -52,6 +51,10 @@
                 <div class="overview-grid">
                     <section class="content-section overview-reports-section">
                         <div class="section-title-row"><div><p class="eyebrow">SCHOOL-WIDE REPORTS</p><h2>Latest submissions</h2></div></div>
+                        <form class="filter-bar" id="overview-table-filters" role="search">
+                            <label class="filter-search">Search submissions<input id="overview-search" type="search" placeholder="Title, description, student, category"></label>
+                            <label>Sort<select id="overview-sort"><option value="newest">Newest first</option><option value="oldest">Oldest first</option><option value="priority">Highest priority</option></select></label>
+                        </form>
                         <div id="overview-reports" class="overview-report-table-wrap" aria-live="polite"><p class="loading-state">Loading reports…</p></div>
                     </section>
                     <section class="content-section overview-grades-section">
@@ -83,17 +86,21 @@
                 <div id="folder-content" class="folder-content" aria-live="polite"><p class="loading-state">Choose a grade level to open its reports.</p></div>
             </section>
 
-            <section class="admin-panel" data-panel="settings" aria-labelledby="class-options-title" hidden>
-                <div class="admin-page-heading">
-                    <div><p class="eyebrow">SCHOOL DIRECTORY</p><h1 id="class-options-title">Settings</h1><p class="lede">Manage Grade Levels, Sections, and the class choices used for student assignments.</p></div>
+            <section class="admin-panel class-workspace" data-panel="classes" aria-labelledby="class-options-title" hidden>
+                <nav class="class-workspace-breadcrumb" id="class-workspace-breadcrumb" aria-label="Class folder location"></nav>
+                <div class="class-workspace-heading">
+                    <div><p class="eyebrow">LIFE INSTITUTE · MARIVELES</p><h1 id="class-options-title">Class Management</h1><p class="lede" id="class-workspace-lede">Manage grade levels and sections for student assignments.</p></div>
+                    <div class="class-workspace-actions" aria-label="Class management actions">
+                        <button class="button button-outline" id="open-class-import" type="button" aria-expanded="false" aria-controls="class-import-panel">Import Excel list</button>
+                        <button class="button button-primary" type="button" data-create-grade><span aria-hidden="true">＋</span> Add Grade Level</button>
+                        <button class="button button-primary" id="add-class-section" type="button" data-create-section hidden><span aria-hidden="true">＋</span> Add Section</button>
+                    </div>
                 </div>
-                <section class="settings-section" aria-labelledby="class-management-title">
-                <div class="section-title-row"><div><p class="eyebrow">CLASS MANAGEMENT</p><h2 id="class-management-title">Grade Levels and Sections</h2></div></div>
-                <div class="class-management-actions" aria-label="Create class folders">
-                    <button class="button button-outline" type="button" data-create-grade>＋ New grade level</button>
-                    <button class="button button-outline" type="button" data-create-section>＋ New section</button>
-                </div>
-                <div class="class-import-layout">
+                <div class="class-workspace-summary" id="class-workspace-summary"></div>
+                <section id="class-folder-workspace" class="class-folder-workspace" aria-live="polite"><p class="loading-state">Loading grade levels…</p></section>
+                <details id="class-import-panel" class="class-import-panel">
+                    <summary><span>Import class list</span><small>Upload an Excel workbook to update grade and section options</small></summary>
+                    <div class="class-import-layout">
                     <section class="class-import-instructions">
                         <h2>Workbook format</h2>
                         <p>Use the first worksheet. The first row must contain <strong>Grade Level</strong> and <strong>Section</strong> headings. Leave fully blank rows out or use them as spacing.</p>
@@ -120,16 +127,11 @@
                         <button class="button button-quiet" id="cancel-class-import" type="button">Cancel preview</button>
                     </div>
                 </section>
-                <section class="class-option-current" aria-labelledby="class-options-current-title">
-                    <div class="section-title-row"><div><p class="eyebrow">DIRECTORY MANAGEMENT</p><h2 id="class-options-current-title">Class options</h2></div></div>
-                    <p class="class-options-help">Rename or archive Grade Levels and Sections here. Existing student assignments and report history remain linked to their original records.</p>
-                    <div id="class-options-list" class="directory-list" aria-live="polite"><p class="loading-state">Loading class options…</p></div>
-                </section>
-                </section>
+                    </details>
             </section>
         </main>
     </div>
-    <button class="report-fab" type="button" data-open-report aria-label="Create a maintenance report" title="Create a report">+</button>
+    <button class="report-fab" type="button" data-open-report aria-label="Create a maintenance report" title="Create a report"><span aria-hidden="true">＋</span><span>Add Report</span></button>
 
     <dialog class="app-dialog" id="report-dialog" aria-labelledby="report-dialog-title">
         <form class="dialog-panel" id="report-form">

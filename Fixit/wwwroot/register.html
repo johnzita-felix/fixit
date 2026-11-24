@@ -190,6 +190,13 @@ const verificationButton = document.getElementById('verify-registration-button')
 const resendButton = document.getElementById('resend-registration-code');
 const submitButton = document.getElementById('registerButton');
 const countdown = document.getElementById('verification-countdown');
+const nameInput = document.getElementById('reguser');
+const validPersonName = value => /^[\p{L}][\p{L}\p{M}\s'-]*[\p{L}]$|^[\p{L}]$/.test(value.trim());
+nameInput.addEventListener('input', () => {
+  nameInput.value = nameInput.value.trimStart().replace(/\s{2,}/g, ' ');
+  const valid = validPersonName(nameInput.value);
+  nameInput.setCustomValidity(valid || nameInput.value === '' ? '' : 'Use letters only, with spaces, hyphens, or apostrophes.');
+});
 const showMessage = (text, kind = '') => {
   verificationMessage.className = kind;
   verificationMessage.textContent = text;
@@ -273,6 +280,13 @@ function showVerificationStage(email, responseData) {
 
 registerForm.addEventListener('submit', async (event) => {
   event.preventDefault();
+  const normalizedName = nameInput.value.trim().replace(/\s{2,}/g, ' ');
+  nameInput.value = normalizedName;
+  if (!validPersonName(normalizedName) || normalizedName.length < 3 || normalizedName.length > 50) {
+    showMessage('Enter a valid name using letters, spaces, hyphens, or apostrophes only.', 'error');
+    nameInput.focus();
+    return;
+  }
   const email = document.getElementById('email').value.trim();
   if (Boolean(gradeSelect.value) !== Boolean(sectionSelect.value)) {
     showMessage('Choose both a grade level and section, or leave both unselected.', 'error');

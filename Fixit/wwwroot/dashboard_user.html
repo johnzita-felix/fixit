@@ -17,7 +17,6 @@
         </a>
         <nav class="primary-nav" aria-label="Student navigation">
             <a class="nav-link is-active" href="dashboard_user.html" aria-current="page">Home</a>
-            <a class="nav-link" href="my_reports.html">My Reports</a>
             
         </nav>
         <div class="account-menu">
@@ -74,10 +73,24 @@
                 </div>
             </section>
         </div>
+        <section class="content-section reports-workspace" aria-labelledby="reports-title">
+            <div class="section-title-row">
+                <div><p class="eyebrow">SUBMISSIONS &amp; PROGRESS</p><h2 id="reports-title">My Reports</h2></div>
+                <span class="record-count" id="visible-report-count"></span>
+            </div>
+            <form class="filter-bar" id="report-filters" role="search">
+                <label class="filter-search">Search reports<input id="report-search" type="search" placeholder="Title or description"></label>
+                <label>Status<select id="status-filter"><option value="">All statuses</option><option>Pending</option><option>Acknowledged</option><option>In Progress</option><option>Resolved</option><option>Rejected</option></select></label>
+                <label>Category<select id="category-filter"><option value="">All categories</option><option>General</option><option>Electrical</option><option>Plumbing</option><option>Cleaning</option><option>Furniture</option><option>Safety</option><option>Other</option></select></label>
+                <label>Sort<select id="sort-filter"><option value="newest">Newest first</option><option value="oldest">Oldest first</option></select></label>
+                <button class="button button-quiet" id="clear-filters" type="button">Clear</button>
+            </form>
+            <div id="report-grid" class="report-list" aria-live="polite"><p class="loading-state">Loading your reports…</p></div>
+        </section>
         <p class="page-message" id="dashboard-message" role="status" aria-live="polite"></p>
         <footer class="app-footer"><span>LIFE Institute Mariveles</span><span>Campus care, together.</span></footer>
     </main>
-    <button class="report-fab" type="button" data-open-report aria-label="Submit a maintenance report" title="Submit a report">+</button>
+    <button class="report-fab" type="button" data-open-report aria-label="Submit a maintenance report" title="Submit a report"><span aria-hidden="true">＋</span><span>Add Report</span></button>
 
     <dialog class="app-dialog" id="report-dialog" aria-labelledby="report-dialog-title">
         <form class="dialog-panel" id="report-form">

@@ -14,9 +14,13 @@
     let activeGradeId = null;
     let activeFolder = 'overview';
     let overviewPage = 1;
+    let overviewRows = [];
     let gradeReportsPage = 1;
     let adminRefreshTimer = null;
     let classFolderDialogState = null;
+    let classViewGradeId = null;
+    let showArchivedClassGrades = false;
+    let showArchivedClassSections = false;
 
     const byId = id => document.getElementById(id);
     const escapeHtml = value => String(value ?? '').replace(/[&<>"']/g, character => ({
@@ -304,15 +308,16 @@
         if (!items.length)
             return emptyState('No reports match these filters', 'Try changing the search or filters to see more reports.');
         return `<div class="admin-report-table-scroll"><table class="admin-report-list"><thead><tr>
-            <th>Report</th>${includeGrade ? '<th>Grade Level</th>' : ''}<th>Category</th><th>Section</th>
-            <th>Submitted</th><th>Priority</th><th>Status</th><th>Review</th></tr></thead><tbody>
+            <th>Report ID</th><th>Report Title</th><th>Description</th><th>Category</th>${includeGrade ? '<th>Grade Level</th>' : ''}<th>Section</th>
+            <th>Submitted By</th><th>Date Submitted</th><th>Priority / Severity</th><th>Current Status</th><th>Review Status</th></tr></thead><tbody>
             ${items.map(report => `<tr class="${report.isReviewed ? '' : 'is-new-report'}">
                 <td><button type="button" class="report-title-link" data-action="open-report" data-report-id="${report.id}">
-                    <span>FI-${String(report.id).padStart(6, '0')} · ${escapeHtml(report.title)}</span>
-                    ${report.description ? `<small>${escapeHtml(report.description)}</small>` : ''}
+                    FI-${String(report.id).padStart(6, '0')}
                 </button></td>
-                ${includeGrade ? `<td>${escapeHtml(report.gradeLevel || 'Unassigned')}</td>` : ''}
-                <td>${escapeHtml(report.category)}</td><td>${escapeHtml(report.section || '—')}</td>
+                <td><strong>${escapeHtml(report.title)}</strong></td>
+                <td>${escapeHtml(report.description || '—')}</td>
+                <td>${escapeHtml(report.category)}</td>${includeGrade ? `<td>${escapeHtml(report.gradeLevel || 'Unassigned')}</td>` : ''}
+                <td>${escapeHtml(report.section || '—')}</td><td>${escapeHtml(report.reporter || 'Unknown')}</td>
                 <td>${formatDate(report.createdAt)}</td><td>${priorityPill(report.priority)}</td>
                 <td>${statusPill(report.status)}</td><td>${reviewAction(report)}</td></tr>`).join('')}
         </tbody></table></div>`;
@@ -372,7 +377,13 @@
             byId('class-folder-dialog-copy').textContent = `Rename “${state.name}”${location}. Existing student assignments and historical reports remain linked to this folder.`;
             submit.textContent = 'Save name';
         } else if (mode === 'delete') {
-            byId('class-folder-dialog-copy').textContent = `Permanently delete “${state.name}”${location}. This is only allowed when no student or report history depends on it. No students or reports will be deleted.`;
+            const deps = state.dependencies || {};
+            const hasDependencies = state.type === 'grade'
+                ? (deps.sectionCount || 0) + (deps.studentCount || 0) + (deps.reportCount || 0) > 0
+                : (deps.studentCount || 0) + (deps.reportCount || 0) > 0;
+            byId('class-folder-dialog-copy').textContent = hasDependencies
+                ? `Permanent deletion is unavailable for “${state.name}”${location} because it has existing student, section, or report dependencies. Cancel this dialog and use Archive instead.`
+                : `Permanently delete “${state.name}”${location}. This is final and will remove the record from SQLite.`;
             submit.textContent = 'Delete permanently';
         } else if (mode === 'archive') {
             const dependencies = state.dependencies || {};
@@ -408,7 +419,7 @@
         if (mode === 'archive' || mode === 'delete') {
             const dependencies = await request(folderEndpoint(type, id, 'check'));
             openClassFolderDialog({
-                mode: mode === 'delete' && dependencies.canDelete ? 'delete' : 'archive',
+                mode,
                 type, id, name, dependencies
             });
             return;
@@ -466,12 +477,27 @@
         }
     }
 
+    async function refreshGradeSectionFilter() {
+        if (!activeGradeId) return [];
+        const sectionDirectory = await request(`/api/admin/report-folders/grades/${activeGradeId}/sections`);
+        const sectionSelect = byId('folder-section');
+        const selectedSection = sectionDirectory.sections.some(section =>
+            section.isActive && String(section.id) === sectionSelect.value)
+            ? sectionSelect.value : '';
+        sectionSelect.innerHTML = `<option value="">All Sections</option>${sectionDirectory.sections
+            .filter(section => section.isActive)
+            .map(section => `<option value="${section.id}">${escapeHtml(section.name)}</option>`).join('')}`;
+        sectionSelect.value = selectedSection;
+        return sectionDirectory.sections.filter(section => section.isActive);
+    }
+
     async function loadGradeReports() {
         if (!activeGradeId) return;
         activeFolder = 'reports';
         adminBreadcrumbs();
         byId('folder-toolbar').hidden = false;
         byId('folder-content').innerHTML = '<p class="loading-state">Loading reports…</p>';
+        const activeSections = await refreshGradeSectionFilter();
         const params = new URLSearchParams({
             search: byId('folder-search').value.trim(),
             status: byId('folder-status').value,
@@ -481,16 +507,6 @@
             page: String(gradeReportsPage)
         });
         const result = await request(`/api/admin/report-folders/grades/${activeGradeId}/reports?${params}`);
-        const sectionSelect = byId('folder-section');
-        const selectedSection = result.sections.some(section => String(section.id) === sectionSelect.value)
-            ? sectionSelect.value : '';
-        sectionSelect.innerHTML = `<option value="">All sections</option>${result.sections.map(section =>
-            `<option value="${section.id}">${escapeHtml(section.name)}</option>`).join('')}`;
-        sectionSelect.value = selectedSection;
-        if (!selectedSection && params.get('sectionId')) {
-            gradeReportsPage = 1;
-            return loadGradeReports();
-        }
         const firstItem = result.totalReports ? (result.page - 1) * result.pageSize + 1 : 0;
         const lastItem = Math.min(result.page * result.pageSize, result.totalReports);
         const pagination = result.totalReports
@@ -501,6 +517,9 @@
             : '';
         byId('folder-content').innerHTML = `<div class="folder-section-heading"><div><h2>${escapeHtml(result.gradeLevel)} reports</h2>
             <span class="record-count">${result.totalReports} ${result.totalReports === 1 ? 'report' : 'reports'} · all sections</span></div></div>
+            ${activeSections.length === 0
+                ? '<p class="class-options-help">This Grade Level has no active sections. Archived-section reports remain available with All Sections selected.</p>'
+                : ''}
             ${renderAdminReportTable(result.reports)}${pagination}`;
     }
 
@@ -519,6 +538,7 @@
 
     async function loadAdminOverview() {
         const data = await request(`/api/admin/overview?page=${overviewPage}&pageSize=10`);
+        overviewRows = data.reports || [];
         overviewPage = data.page;
         byId('overview-total').textContent = data.total;
         byId('overview-pending').textContent = data.pending + data.acknowledged;
@@ -535,28 +555,106 @@
                 <span>Page ${data.page} of ${data.totalPages}</span>
                 <button type="button" data-overview-page="${data.page + 1}" ${data.page >= data.totalPages ? 'disabled' : ''}>Next</button></div></div>`
             : '';
-        byId('overview-reports').innerHTML = data.reports.length
-            ? `${renderAdminReportTable(data.reports, true)}${pagination}`
+        const search = (byId('overview-search')?.value || '').trim().toLowerCase();
+        const sort = byId('overview-sort')?.value || 'newest';
+        const priorityRank = { Critical: 4, High: 3, Normal: 2, Low: 1 };
+        let visibleRows = overviewRows.filter(report =>
+            !search || [report.title, report.description, report.category, report.reporter, report.gradeLevel, report.section]
+                .some(value => String(value || '').toLowerCase().includes(search)));
+        visibleRows = [...visibleRows].sort((a, b) => sort === 'oldest'
+            ? new Date(a.createdAt) - new Date(b.createdAt)
+            : sort === 'priority'
+                ? (priorityRank[b.priority] || 0) - (priorityRank[a.priority] || 0)
+                : new Date(b.createdAt) - new Date(a.createdAt));
+        byId('overview-reports').innerHTML = visibleRows.length
+            ? `${renderAdminReportTable(visibleRows, true)}${pagination}`
             : '<p class="empty-state">No reports have been submitted yet.</p>';
     }
 
     async function loadClassDirectory() {
         const directory = await request('/api/admin/class-options');
         classes = directory.grades || [];
-        const list = byId('class-options-list');
-        if (list) {
-            list.innerHTML = classes.length
-                ? `<div class="class-option-directory">${classes.map(grade => `<section class="class-option-grade${grade.isActive ? '' : ' is-archived'}">
-                    <div class="class-option-grade-heading"><div><span class="eyebrow">GRADE LEVEL${grade.isActive ? '' : ' · ARCHIVED'}</span><h3>${escapeHtml(grade.name)}</h3></div>
-                        <div class="folder-card-menu">${folderMenu('grade', grade.id, grade.name, grade.isActive)}</div></div>
-                    <div class="class-option-sections">${grade.sections.length ? grade.sections.map(section => `<div class="class-option-section${section.isActive ? '' : ' is-archived'}">
-                        <span>${escapeHtml(section.name)}${section.isActive ? '' : ' · Archived'}</span>
-                        <div class="folder-card-menu">${folderMenu('section', section.id, section.name, section.isActive)}</div>
-                    </div>`).join('') : '<p class="class-options-help">No sections yet.</p>'}</div>
-                    </section>`).join('')}</div>`
-                : emptyState('No class options', 'Import a workbook or create a Grade Level and Section to make class options available.');
-        }
+        await renderClassWorkspace();
         return classes;
+    }
+
+    function classFolderIcon() {
+        return '<svg viewBox="0 0 32 26" aria-hidden="true"><path d="M2.5 5.5a2 2 0 0 1 2-2h8l3 3h12a2 2 0 0 1 2 2v12a2 2 0 0 1-2 2h-23a2 2 0 0 1-2-2z"></path><path d="M2.5 9h27"></path></svg>';
+    }
+
+    function classFolderCard({ id, name, type, isActive, primary, reports, gradeId = null }) {
+        return `<article class="class-folder${isActive ? '' : ' is-archived'}">
+            <button type="button" class="class-folder-open" data-class-open="${type}" data-folder-id="${id}"${gradeId ? ` data-grade-id="${gradeId}"` : ''} aria-label="Open ${escapeHtml(name)} folder">
+                <span class="class-folder-visual" aria-hidden="true"><span class="class-folder-tab"></span><span class="class-folder-paper"></span><span class="class-folder-glyph">${classFolderIcon()}</span><span class="class-folder-corner">↗</span></span>
+                <span class="class-folder-copy">
+                    <span class="class-folder-kind">${type === 'grade' ? 'GRADE LEVEL' : 'SECTION'}${isActive ? '' : '<span class="class-folder-archived">ARCHIVED</span>'}</span>
+                    <strong class="class-folder-name">${escapeHtml(name)}</strong>
+                    <span class="class-folder-metrics"><span>${escapeHtml(primary)}</span><span>${reports} ${reports === 1 ? 'report' : 'reports'}</span></span>
+                    <span class="class-folder-open-label">Open folder <span aria-hidden="true">↗</span></span>
+                </span>
+            </button>
+            <div class="folder-card-menu">${folderMenu(type, id, name, isActive)}</div>
+        </article>`;
+    }
+
+    function classWorkspaceEmpty(title, description, action) {
+        return `<div class="class-folder-empty">
+            <div class="class-empty-art" aria-hidden="true"><span class="class-empty-sheet"></span><span class="class-empty-folder">${classFolderIcon()}</span></div>
+            <p class="eyebrow">CLASS RECORDS</p>
+            <h2>${escapeHtml(title)}</h2><p>${escapeHtml(description)}</p>
+            ${action ? `<button type="button" class="button button-primary" ${action === 'grade' ? 'data-create-grade' : 'data-create-section'}><span aria-hidden="true">＋</span> ${action === 'grade' ? 'Add Grade Level' : 'Add Section'}</button>` : ''}
+        </div>`;
+    }
+
+    async function renderClassWorkspace() {
+        const workspace = byId('class-folder-workspace');
+        if (!workspace) return;
+        const grade = classes.find(item => item.id === classViewGradeId) || null;
+        byId('add-class-section').hidden = !grade || !grade.isActive;
+        if (!grade) {
+            byId('class-workspace-breadcrumb').innerHTML = '<span aria-current="page">Class Management</span>';
+            byId('class-options-title').textContent = 'Class Management';
+            byId('class-workspace-lede').textContent = 'Manage grade levels and sections for student assignments.';
+            const gradeData = await request('/api/admin/report-folders/grades?includeArchived=true').catch(() => []);
+            const visible = classes.filter(item => showArchivedClassGrades ? !item.isActive : item.isActive);
+            const archivedCount = classes.filter(item => !item.isActive).length;
+            const activeCount = classes.filter(item => item.isActive).length;
+            const totalSections = classes.filter(item => item.isActive).reduce((sum, item) => sum + item.sections.filter(section => section.isActive).length, 0);
+            const totalReports = gradeData.reduce((sum, item) => sum + (item.reportCount || 0), 0);
+            byId('class-workspace-summary').innerHTML = `<span><strong>${activeCount}</strong> active grade levels</span><span><strong>${totalSections}</strong> sections</span><span><strong>${totalReports}</strong> reports</span>`;
+            const toggle = archivedCount ? `<button type="button" class="class-archive-toggle" data-class-toggle-archived="grades">${showArchivedClassGrades ? '← Back to active grades' : `View archived grades <span>${archivedCount}</span>`}</button>` : '';
+            workspace.innerHTML = `<div class="class-directory-head"><div><p class="eyebrow">${showArchivedClassGrades ? 'RETAINED CLASS RECORDS' : 'THE SCHOOL DIRECTORY'}</p><h2>${showArchivedClassGrades ? 'Archived grade levels' : 'Grade Levels'}</h2></div>${toggle}</div>
+                ${visible.length ? `<div class="folder-grid class-folder-grid">${visible.map(item => {
+                    const data = gradeData.find(value => value.id === item.id);
+                    return classFolderCard({ id: item.id, name: item.name, type: 'grade', isActive: item.isActive,
+                        primary: `${item.sections.filter(section => section.isActive).length} ${item.sections.filter(section => section.isActive).length === 1 ? 'section' : 'sections'}`,
+                        reports: data?.reportCount || 0 });
+                }).join('')}</div>` : classWorkspaceEmpty(showArchivedClassGrades ? 'No archived grade levels' : 'No grade levels yet',
+                    showArchivedClassGrades ? 'Archived grade levels will appear here.' : 'Create the first grade-level folder, or import the school’s class list.',
+                    showArchivedClassGrades ? null : 'grade')}`;
+            return;
+        }
+
+        byId('class-workspace-breadcrumb').innerHTML = `<button type="button" data-class-root>Class Management</button><span aria-hidden="true">/</span><span aria-current="page">${escapeHtml(grade.name)}</span>`;
+        byId('class-options-title').textContent = grade.name;
+        byId('class-workspace-lede').textContent = 'Manage this grade level’s sections and review its report activity.';
+        workspace.innerHTML = '<p class="loading-state">Opening grade level…</p>';
+        const result = await request(`/api/admin/report-folders/grades/${grade.id}/sections?includeArchived=true`);
+        const sections = result.sections.filter(item => showArchivedClassSections ? !item.isActive : item.isActive);
+        const activeSections = result.sections.filter(item => item.isActive);
+        const archivedCount = result.sections.filter(item => !item.isActive).length;
+        const totalReports = result.sections.reduce((sum, item) => sum + (item.reportCount || 0), 0);
+        const totalStudents = result.sections.reduce((sum, item) => sum + (item.studentCount || 0), 0);
+        byId('class-workspace-summary').innerHTML = `<span><strong>${activeSections.length}</strong> active sections</span><span><strong>${totalStudents}</strong> students</span><span><strong>${totalReports}</strong> reports</span>`;
+        const toggle = archivedCount ? `<button type="button" class="class-archive-toggle" data-class-toggle-archived="sections">${showArchivedClassSections ? '← Back to active sections' : `View archived sections <span>${archivedCount}</span>`}</button>` : '';
+        workspace.innerHTML = `<section class="class-grade-context"><span class="class-grade-seal" aria-hidden="true">${escapeHtml(grade.name.match(/\d+/)?.[0] || 'LI')}</span><div><p class="eyebrow">GRADE LEVEL FOLDER</p><h2>${escapeHtml(grade.name)}</h2><p>${activeSections.length} active sections · ${totalReports} reports</p></div><span class="class-grade-index">CLASS DIRECTORY / ${String(grade.id).padStart(2, '0')}</span></section>
+            <div class="class-directory-head"><div><p class="eyebrow">${showArchivedClassSections ? 'RETAINED CLASS RECORDS' : 'INSIDE THIS GRADE LEVEL'}</p><h2>${showArchivedClassSections ? 'Archived sections' : 'Sections'}</h2></div>${toggle}</div>
+            ${sections.length ? `<div class="folder-grid class-folder-grid class-section-grid">${sections.map(item => classFolderCard({
+                id: item.id, name: item.name, type: 'section', isActive: item.isActive, gradeId: grade.id,
+                primary: `${item.studentCount || 0} ${(item.studentCount || 0) === 1 ? 'student' : 'students'}`, reports: item.reportCount || 0
+            })).join('')}</div>` : classWorkspaceEmpty(showArchivedClassSections ? 'No archived sections' : 'No sections in this grade yet',
+                showArchivedClassSections ? 'Archived sections will appear here.' : 'Add a section to complete this grade-level folder.',
+                showArchivedClassSections || !grade.isActive ? null : 'section')}`;
     }
 
     let classImportPreview = null;
@@ -567,16 +665,28 @@
             : '<p class="label-muted">None</p>';
         const formatSections = entries => formatNames(entries.map(entry =>
             `${entry.gradeLevel} · ${entry.section}`));
+        const formatUpdates = entries => formatNames(entries.map(entry =>
+            `${entry.gradeLevel ? `${entry.gradeLevel} · ` : ''}${entry.currentName} → ${entry.name}`));
+        const formatRemovals = entries => formatNames(entries.map(entry => {
+            const name = entry.gradeLevel === entry.name ? entry.name : `${entry.gradeLevel} · ${entry.name}`;
+            return `${name} · ${entry.studentCount} students · ${entry.reportCount} reports`;
+        }));
         byId('class-import-diff').innerHTML = `
             <div class="import-change-grid">
                 <section><h3>Grade levels to add (${preview.gradesToAdd.length})</h3>${formatNames(preview.gradesToAdd)}</section>
-                <section><h3>Grade levels to update (${preview.gradesToRestore.length})</h3>${formatNames(preview.gradesToRestore)}</section>
-                <section><h3>Grade levels to remove from dropdowns (${preview.gradesToRemove.length})</h3>${formatNames(preview.gradesToRemove)}</section>
+                <section><h3>Grade levels to restore (${preview.gradesToRestore.length})</h3>${formatNames(preview.gradesToRestore)}</section>
+                <section><h3>Grade levels to update (${preview.gradesToUpdate.length})</h3>${formatUpdates(preview.gradesToUpdate)}</section>
+                <section><h3>Grade levels to retain (${preview.gradesToRetain.length})</h3>${formatNames(preview.gradesToRetain)}</section>
+                <section><h3>Grade levels to delete (${preview.gradesToDelete.length})</h3>${formatRemovals(preview.gradesToDelete)}</section>
+                <section><h3>Grade levels to archive (${preview.gradesToArchive.length})</h3>${formatRemovals(preview.gradesToArchive)}</section>
                 <section><h3>Sections to add (${preview.sectionsToAdd.length})</h3>${formatSections(preview.sectionsToAdd)}</section>
-                <section><h3>Sections to update (${preview.sectionsToRestore.length})</h3>${formatSections(preview.sectionsToRestore)}</section>
-                <section><h3>Sections to remove from dropdowns (${preview.sectionsToRemove.length})</h3>${formatSections(preview.sectionsToRemove)}</section>
+                <section><h3>Sections to restore (${preview.sectionsToRestore.length})</h3>${formatSections(preview.sectionsToRestore)}</section>
+                <section><h3>Sections to update (${preview.sectionsToUpdate.length})</h3>${formatUpdates(preview.sectionsToUpdate)}</section>
+                <section><h3>Sections to retain (${preview.sectionsToRetain.length})</h3>${formatSections(preview.sectionsToRetain)}</section>
+                <section><h3>Sections to delete (${preview.sectionsToDelete.length})</h3>${formatRemovals(preview.sectionsToDelete)}</section>
+                <section><h3>Sections to archive (${preview.sectionsToArchive.length})</h3>${formatRemovals(preview.sectionsToArchive)}</section>
             </div>
-            <p class="import-unchanged">${preview.unchangedSections} section options will remain active. Archived choices are removed only from dropdowns; existing assignments and reports are preserved.</p>`;
+            <p class="import-unchanged">Outdated entries with students or report history are archived; entries without dependencies are deleted. No student assignments or reports are changed.</p>`;
     }
 
     function setupClassOptionsImport() {
@@ -628,6 +738,11 @@
                 byId('class-import-preview').hidden = true;
                 byId('class-import-form').reset();
                 await loadClassDirectory();
+                if (activeGradeId) {
+                    await refreshGradeSectionFilter();
+                    if (activeFolder === 'reports') await loadGradeReports();
+                }
+                await loadAdminOverview();
                 showMessage(result.message);
             } catch (error) {
                 byId('class-import-confirm-error').textContent = error.message;
@@ -648,7 +763,7 @@
         activeFolder = name;
         if (name === 'overview') await loadAdminOverview();
         if (name === 'reports' && activeGradeId) await loadGradeReports();
-        if (name === 'settings') await loadClassDirectory();
+        if (name === 'classes') await loadClassDirectory();
     }
 
     async function loadAdmin() {
@@ -803,20 +918,78 @@
     }
 
     function setupAdminActions() {
+        byId('overview-search')?.addEventListener('input', () => loadAdminOverview().catch(error => showMessage(error.message, true)));
+        byId('overview-sort')?.addEventListener('change', () => loadAdminOverview().catch(error => showMessage(error.message, true)));
         byId('class-folder-form').addEventListener('submit', submitClassFolderDialog);
-        document.querySelector('.class-management-actions')?.addEventListener('click', event => {
+        byId('class-folder-workspace')?.addEventListener('click', event => {
+            const menuTrigger = event.target.closest('.folder-menu-trigger');
+            if (menuTrigger) {
+                const menu = menuTrigger.nextElementSibling;
+                const opening = menu.hidden;
+                byId('class-folder-workspace').querySelectorAll('.folder-action-menu').forEach(item => { item.hidden = true; });
+                byId('class-folder-workspace').querySelectorAll('.folder-menu-trigger').forEach(item => item.setAttribute('aria-expanded', 'false'));
+                menu.hidden = !opening;
+                menuTrigger.setAttribute('aria-expanded', String(opening));
+                return;
+            }
+            const archiveToggle = event.target.closest('[data-class-toggle-archived]');
+            if (archiveToggle) {
+                if (archiveToggle.dataset.classToggleArchived === 'grades') showArchivedClassGrades = !showArchivedClassGrades;
+                else showArchivedClassSections = !showArchivedClassSections;
+                renderClassWorkspace().catch(error => showMessage(error.message, true));
+                return;
+            }
+            const manageButton = event.target.closest('[data-folder-manage]');
+            if (manageButton) {
+                prepareFolderManagement(manageButton).catch(error => showMessage(error.message, true));
+                return;
+            }
+            const folder = event.target.closest('[data-class-open]');
+            if (folder) {
+                if (folder.dataset.classOpen === 'grade') {
+                    classViewGradeId = Number(folder.dataset.folderId);
+                    showArchivedClassSections = false;
+                    renderClassWorkspace().catch(error => showMessage(error.message, true));
+                } else {
+                    activeGradeId = Number(folder.dataset.gradeId);
+                    gradeReportsPage = 1;
+                    showAdminPanel('reports').catch(error => showMessage(error.message, true));
+                }
+            }
+        });
+        byId('class-workspace-breadcrumb')?.addEventListener('click', event => {
+            if (!event.target.closest('[data-class-root]')) return;
+            classViewGradeId = null;
+            showArchivedClassGrades = false;
+            showArchivedClassSections = false;
+            renderClassWorkspace().catch(error => showMessage(error.message, true));
+        });
+        byId('open-class-import')?.addEventListener('click', () => {
+            const panel = byId('class-import-panel');
+            panel.open = !panel.open;
+            if (panel.open) panel.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+        });
+        byId('class-import-panel')?.addEventListener('toggle', event => {
+            byId('open-class-import').setAttribute('aria-expanded', String(event.currentTarget.open));
+        });
+        document.querySelectorAll('[data-create-grade]').forEach(button => button.addEventListener('click', () =>
+            openClassFolderDialog({ mode: 'create-grade', type: 'grade' })));
+        byId('add-class-section')?.addEventListener('click', () =>
+            openClassFolderDialog({ mode: 'create-section', type: 'section', gradeId: classViewGradeId }));
+        byId('class-folder-workspace')?.addEventListener('click', event => {
             const createGrade = event.target.closest('[data-create-grade]');
             if (createGrade) {
                 openClassFolderDialog({ mode: 'create-grade', type: 'grade' });
                 return;
             }
             const createSection = event.target.closest('[data-create-section]');
-            if (!createSection) return;
-            if (!classes.some(grade => grade.isActive)) {
-                showMessage('Create or restore a grade level before adding sections.', true);
-                return;
+            if (createSection) {
+                if (!classes.some(grade => grade.isActive)) {
+                    showMessage('Create or restore a grade level before adding sections.', true);
+                    return;
+                }
+                openClassFolderDialog({ mode: 'create-section', type: 'section', gradeId: classViewGradeId });
             }
-            openClassFolderDialog({ mode: 'create-section', type: 'section' });
         });
         document.querySelectorAll('[data-view]').forEach(button => button.addEventListener('click', () => {
             showAdminPanel(button.dataset.view).catch(error => showMessage(error.message, true));
@@ -826,6 +999,7 @@
             if (!gradeLink) return;
             activeGradeId = Number(gradeLink.dataset.openGrade);
             gradeReportsPage = 1;
+            byId('folder-section').innerHTML = '<option value="">All Sections</option>';
             showAdminPanel('reports').catch(error => showMessage(error.message, true));
         });
         byId('folder-breadcrumbs').addEventListener('click', event => {
@@ -833,21 +1007,6 @@
             if (!button) return;
             activeGradeId = null;
             showAdminPanel('overview').catch(error => showMessage(error.message, true));
-        });
-        byId('class-options-list').addEventListener('click', event => {
-            const menuTrigger = event.target.closest('.folder-menu-trigger');
-            if (menuTrigger) {
-                const menu = menuTrigger.nextElementSibling;
-                const opening = menu.hidden;
-                byId('class-options-list').querySelectorAll('.folder-action-menu').forEach(item => { item.hidden = true; });
-                byId('class-options-list').querySelectorAll('.folder-menu-trigger').forEach(item => item.setAttribute('aria-expanded', 'false'));
-                menu.hidden = !opening;
-                menuTrigger.setAttribute('aria-expanded', String(opening));
-                return;
-            }
-            const manageButton = event.target.closest('[data-folder-manage]');
-            if (manageButton)
-                prepareFolderManagement(manageButton).catch(error => showMessage(error.message, true));
         });
         ['folder-search', 'folder-status', 'folder-category', 'folder-section', 'folder-sort'].forEach(id => {
             const input = byId(id);
@@ -939,8 +1098,20 @@
     }
 
     function setupSettings() {
+        const settingsName = byId('settings-name');
+        settingsName?.addEventListener('input', () => {
+            const value = settingsName.value.trim().replace(/\s{2,}/g, ' ');
+            settingsName.setCustomValidity(/^[\p{L}\p{M}][\p{L}\p{M}\s'-]*[\p{L}\p{M}]$|^[\p{L}\p{M}]$/.test(value)
+                ? '' : 'Use letters, spaces, hyphens, or apostrophes only.');
+        });
         byId('settings-form')?.addEventListener('submit', async event => {
             event.preventDefault();
+            const normalizedName = settingsName.value.trim().replace(/\s{2,}/g, ' ');
+            if (!/^[\p{L}\p{M}][\p{L}\p{M}\s'-]*[\p{L}\p{M}]$|^[\p{L}\p{M}]$/.test(normalizedName)) {
+                byId('settings-error').textContent = 'Use letters, spaces, hyphens, or apostrophes only.';
+                return;
+            }
+            settingsName.value = normalizedName;
             const button = event.currentTarget.querySelector('[type="submit"]');
             button.disabled = true;
             byId('settings-error').textContent = '';
