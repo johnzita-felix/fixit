@@ -12,6 +12,7 @@
     let notifications = [];
     let activeReportId = null;
     let activeGradeId = null;
+    let activeSectionId = null;
     let activeFolder = 'overview';
     let overviewPage = 1;
     let overviewRows = [];
@@ -290,7 +291,12 @@
         if (activeGradeId) {
             const grade = classes.find(item => item.id === activeGradeId);
             parts.push('<span aria-hidden="true">/</span>');
-            parts.push(`<span aria-current="page">${escapeHtml(grade?.name || 'Grade level')}</span>`);
+            parts.push(`<button type="button" data-folder-level="grade">${escapeHtml(grade?.name || 'Grade level')}</button>`);
+        }
+        if (activeSectionId) {
+            const section = classes.find(item => item.id === activeGradeId)?.sections.find(item => item.id === activeSectionId);
+            parts.push('<span aria-hidden="true">/</span>');
+            parts.push(`<span aria-current="page">${escapeHtml(section?.name || 'Section')}</span>`);
         }
         nav.innerHTML = parts.join('');
     }
@@ -635,7 +641,7 @@
             return;
         }
 
-        byId('class-workspace-breadcrumb').innerHTML = `<button type="button" data-class-root>Class Management</button><span aria-hidden="true">/</span><span aria-current="page">${escapeHtml(grade.name)}</span>`;
+        byId('class-workspace-breadcrumb').innerHTML = `<button type="button" data-class-root>← Class Management</button><span aria-hidden="true">/</span><span aria-current="page">${escapeHtml(grade.name)}</span>`;
         byId('class-options-title').textContent = grade.name;
         byId('class-workspace-lede').textContent = 'Manage this grade level’s sections and review its report activity.';
         workspace.innerHTML = '<p class="loading-state">Opening grade level…</p>';
@@ -952,7 +958,9 @@
                     renderClassWorkspace().catch(error => showMessage(error.message, true));
                 } else {
                     activeGradeId = Number(folder.dataset.gradeId);
+                    activeSectionId = Number(folder.dataset.folderId);
                     gradeReportsPage = 1;
+                    byId('folder-section').value = String(activeSectionId);
                     showAdminPanel('reports').catch(error => showMessage(error.message, true));
                 }
             }
@@ -998,6 +1006,7 @@
             const gradeLink = event.target.closest('[data-open-grade]');
             if (!gradeLink) return;
             activeGradeId = Number(gradeLink.dataset.openGrade);
+            activeSectionId = null;
             gradeReportsPage = 1;
             byId('folder-section').innerHTML = '<option value="">All Sections</option>';
             showAdminPanel('reports').catch(error => showMessage(error.message, true));
@@ -1005,8 +1014,15 @@
         byId('folder-breadcrumbs').addEventListener('click', event => {
             const button = event.target.closest('[data-folder-level]');
             if (!button) return;
-            activeGradeId = null;
-            showAdminPanel('overview').catch(error => showMessage(error.message, true));
+            if (button.dataset.folderLevel === 'overview') {
+                activeGradeId = null;
+                activeSectionId = null;
+                showAdminPanel('overview').catch(error => showMessage(error.message, true));
+            } else if (button.dataset.folderLevel === 'grade') {
+                activeSectionId = null;
+                byId('folder-section').value = '';
+                loadGradeReports().catch(error => showMessage(error.message, true));
+            }
         });
         ['folder-search', 'folder-status', 'folder-category', 'folder-section', 'folder-sort'].forEach(id => {
             const input = byId(id);
@@ -1099,15 +1115,21 @@
 
     function setupSettings() {
         const settingsName = byId('settings-name');
+        const validPersonName = value => {
+            const name = value.trim();
+            return Boolean(name) && Array.from(name).every(character =>
+                /[\p{L}\p{M}]/u.test(character) || /[\s'-]/u.test(character));
+        };
         settingsName?.addEventListener('input', () => {
             const value = settingsName.value.trim().replace(/\s{2,}/g, ' ');
-            settingsName.setCustomValidity(/^[\p{L}\p{M}][\p{L}\p{M}\s'-]*[\p{L}\p{M}]$|^[\p{L}\p{M}]$/.test(value)
+            settingsName.setCustomValidity(validPersonName(value)
                 ? '' : 'Use letters, spaces, hyphens, or apostrophes only.');
         });
         byId('settings-form')?.addEventListener('submit', async event => {
             event.preventDefault();
             const normalizedName = settingsName.value.trim().replace(/\s{2,}/g, ' ');
-            if (!/^[\p{L}\p{M}][\p{L}\p{M}\s'-]*[\p{L}\p{M}]$|^[\p{L}\p{M}]$/.test(normalizedName)) {
+            if (!Array.from(normalizedName).every(character =>
+                /[\p{L}\p{M}]/u.test(character) || /[\s'-]/u.test(character))) {
                 byId('settings-error').textContent = 'Use letters, spaces, hyphens, or apostrophes only.';
                 return;
             }
