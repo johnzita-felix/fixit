@@ -349,8 +349,11 @@
         const nameInput = byId('class-folder-name');
         const confirmInput = byId('class-folder-confirm-name');
         const submit = byId('class-folder-submit');
+        const archiveInstead = byId('class-folder-archive-instead');
         const mode = state.mode;
 
+        submit.disabled = false;
+        archiveInstead.hidden = true;
         byId('class-folder-error').textContent = '';
         byId('class-folder-dialog-title').textContent = mode === 'create-grade' ? 'Create grade level'
             : mode === 'create-section' ? 'Create section'
@@ -387,10 +390,17 @@
             const hasDependencies = state.type === 'grade'
                 ? (deps.sectionCount || 0) + (deps.studentCount || 0) + (deps.reportCount || 0) > 0
                 : (deps.studentCount || 0) + (deps.reportCount || 0) > 0;
+            const count = (value, singular, plural) =>
+                `${value || 0} ${value === 1 ? singular : (plural || `${singular}s`)}`;
+            const dependenciesText = state.type === 'grade'
+                ? `${count(deps.sectionCount, 'section')}, ${count(deps.studentCount, 'student assignment', 'student assignments')}, and ${count(deps.reportCount, 'report')}`
+                : `${count(deps.studentCount, 'student assignment', 'student assignments')} and ${count(deps.reportCount, 'report')}`;
             byId('class-folder-dialog-copy').textContent = hasDependencies
-                ? `Permanent deletion is unavailable for “${state.name}”${location} because it has existing student, section, or report dependencies. Cancel this dialog and use Archive instead.`
+                ? `Permanent deletion is unavailable for “${state.name}”${location}: ${dependenciesText} depend on it. Use the separate Archive action to hide it from new assignments while preserving its history.`
                 : `Permanently delete “${state.name}”${location}. This is final and will remove the record from SQLite.`;
-            submit.textContent = 'Delete permanently';
+            confirmField.hidden = hasDependencies;
+            submit.textContent = hasDependencies ? 'Deletion unavailable' : 'Delete permanently';
+            archiveInstead.hidden = !hasDependencies;
         } else if (mode === 'archive') {
             const dependencies = state.dependencies || {};
             const countText = (count, noun) => `${count || 0} ${noun}${count === 1 ? '' : 's'}`;
@@ -408,7 +418,8 @@
         }
         dialog.showModal();
         if (mode === 'rename') nameInput.focus();
-        else if (mode === 'delete') confirmInput.focus();
+        else if (mode === 'delete' && !confirmField.hidden) confirmInput.focus();
+        else if (mode === 'delete' && !archiveInstead.hidden) archiveInstead.focus();
         else if (nameField.hidden) submit.focus();
         else nameInput.focus();
     }
@@ -423,11 +434,16 @@
             return;
         }
         if (mode === 'archive' || mode === 'delete') {
-            const dependencies = await request(folderEndpoint(type, id, 'check'));
-            openClassFolderDialog({
-                mode,
-                type, id, name, dependencies
-            });
+            const originalText = button.textContent;
+            button.disabled = true;
+            button.textContent = 'Checking…';
+            try {
+                const dependencies = await request(folderEndpoint(type, id, 'check'));
+                openClassFolderDialog({ mode, type, id, name, dependencies });
+            } finally {
+                button.textContent = originalText;
+                button.disabled = false;
+            }
             return;
         }
         openClassFolderDialog({ mode: 'restore', type, id, name });
@@ -439,7 +455,20 @@
         if (!state) return;
         const submit = byId('class-folder-submit');
         const error = byId('class-folder-error');
+        if (state.mode === 'delete') {
+            const dependencies = state.dependencies || {};
+            const hasDependencies = state.type === 'grade'
+                ? (dependencies.sectionCount || 0) + (dependencies.studentCount || 0) + (dependencies.reportCount || 0) > 0
+                : (dependencies.studentCount || 0) + (dependencies.reportCount || 0) > 0;
+            if (hasDependencies) {
+                error.textContent = 'This folder has existing dependencies and cannot be permanently deleted. Use Archive instead.';
+                byId('class-folder-archive-instead').focus();
+                return;
+            }
+        }
+        const idleText = submit.textContent;
         submit.disabled = true;
+        if (state.mode === 'delete') submit.textContent = 'Deleting…';
         error.textContent = '';
         try {
             let result;
@@ -478,7 +507,12 @@
             await loadAdminOverview();
         } catch (requestError) {
             error.textContent = requestError.message;
+            if (state.mode === 'delete' && /archive it instead/i.test(requestError.message)) {
+                byId('class-folder-dialog-copy').textContent = requestError.message;
+                byId('class-folder-archive-instead').hidden = false;
+            }
         } finally {
+            submit.textContent = idleText;
             submit.disabled = false;
         }
     }
@@ -543,7 +577,9 @@
     }
 
     async function loadAdminOverview() {
-        const data = await request(`/api/admin/overview?page=${overviewPage}&pageSize=10`);
+        const overviewSearch = encodeURIComponent((byId('overview-search')?.value || '').trim());
+        const overviewSort = encodeURIComponent(byId('overview-sort')?.value || 'newest');
+        const data = await request(`/api/admin/overview?page=${overviewPage}&pageSize=10&search=${overviewSearch}&sort=${overviewSort}`);
         overviewRows = data.reports || [];
         overviewPage = data.page;
         byId('overview-total').textContent = data.total;
@@ -561,17 +597,7 @@
                 <span>Page ${data.page} of ${data.totalPages}</span>
                 <button type="button" data-overview-page="${data.page + 1}" ${data.page >= data.totalPages ? 'disabled' : ''}>Next</button></div></div>`
             : '';
-        const search = (byId('overview-search')?.value || '').trim().toLowerCase();
-        const sort = byId('overview-sort')?.value || 'newest';
-        const priorityRank = { Critical: 4, High: 3, Normal: 2, Low: 1 };
-        let visibleRows = overviewRows.filter(report =>
-            !search || [report.title, report.description, report.category, report.reporter, report.gradeLevel, report.section]
-                .some(value => String(value || '').toLowerCase().includes(search)));
-        visibleRows = [...visibleRows].sort((a, b) => sort === 'oldest'
-            ? new Date(a.createdAt) - new Date(b.createdAt)
-            : sort === 'priority'
-                ? (priorityRank[b.priority] || 0) - (priorityRank[a.priority] || 0)
-                : new Date(b.createdAt) - new Date(a.createdAt));
+        const visibleRows = overviewRows;
         byId('overview-reports').innerHTML = visibleRows.length
             ? `${renderAdminReportTable(visibleRows, true)}${pagination}`
             : '<p class="empty-state">No reports have been submitted yet.</p>';
@@ -924,9 +950,21 @@
     }
 
     function setupAdminActions() {
-        byId('overview-search')?.addEventListener('input', () => loadAdminOverview().catch(error => showMessage(error.message, true)));
-        byId('overview-sort')?.addEventListener('change', () => loadAdminOverview().catch(error => showMessage(error.message, true)));
+        byId('overview-table-filters')?.addEventListener('submit', event => event.preventDefault());
+        byId('overview-search')?.addEventListener('input', () => {
+            overviewPage = 1;
+            loadAdminOverview().catch(error => showMessage(error.message, true));
+        });
+        byId('overview-sort')?.addEventListener('change', () => {
+            overviewPage = 1;
+            loadAdminOverview().catch(error => showMessage(error.message, true));
+        });
         byId('class-folder-form').addEventListener('submit', submitClassFolderDialog);
+        byId('class-folder-archive-instead')?.addEventListener('click', () => {
+            if (!classFolderDialogState) return;
+            byId('class-folder-dialog').close();
+            openClassFolderDialog({ ...classFolderDialogState, mode: 'archive' });
+        });
         byId('class-folder-workspace')?.addEventListener('click', event => {
             const menuTrigger = event.target.closest('.folder-menu-trigger');
             if (menuTrigger) {

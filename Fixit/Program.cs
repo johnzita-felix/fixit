@@ -2,6 +2,7 @@ using System.Net;
 using System.Net.Mail;
 using System.Security.Claims;
 using System.Security.Cryptography;
+using System.Globalization;
 using System.Text;
 using System.Threading.RateLimiting;
 using System.Xml;
@@ -731,8 +732,8 @@ app.MapGet("/api/admin/class-options/grades/{gradeLevelId:int}/deletion-check", 
         .Select(section => section.Id);
     var sectionCount = await db.SchoolSections.CountAsync(
         section => section.GradeLevelId == gradeLevelId, cancellationToken);
-    var studentCount = await db.Users.CountAsync(user =>
-        user.GradeLevelId == gradeLevelId || (user.SectionId != null && sectionIds.Contains(user.SectionId.Value)),
+    var studentCount = await db.Users.CountAsync(user => user.Role != "demo" &&
+        (user.GradeLevelId == gradeLevelId || (user.SectionId != null && sectionIds.Contains(user.SectionId.Value))),
         cancellationToken);
     var reportCount = await db.Reports.CountAsync(report => db.Users.Any(user =>
         user.Id == report.UserId &&
@@ -759,8 +760,8 @@ app.MapDelete("/api/admin/class-options/grades/{gradeLevelId:int}", async (
         .Select(section => section.Id);
     var hasSections = await db.SchoolSections.AnyAsync(
         section => section.GradeLevelId == gradeLevelId, cancellationToken);
-    var hasStudents = await db.Users.AnyAsync(user =>
-        user.GradeLevelId == gradeLevelId || (user.SectionId != null && sectionIds.Contains(user.SectionId.Value)),
+    var hasStudents = await db.Users.AnyAsync(user => user.Role != "demo" &&
+        (user.GradeLevelId == gradeLevelId || (user.SectionId != null && sectionIds.Contains(user.SectionId.Value))),
         cancellationToken);
     var hasReports = await db.Reports.AnyAsync(report => db.Users.Any(user =>
         user.Id == report.UserId &&
@@ -864,7 +865,8 @@ app.MapGet("/api/admin/class-options/sections/{sectionId:int}/deletion-check", a
     var section = await db.SchoolSections.AsNoTracking()
         .SingleOrDefaultAsync(item => item.Id == sectionId, cancellationToken);
     if (section is null) return Results.NotFound(new { message = "Section not found." });
-    var studentCount = await db.Users.CountAsync(user => user.SectionId == sectionId, cancellationToken);
+    var studentCount = await db.Users.CountAsync(
+        user => user.Role != "demo" && user.SectionId == sectionId, cancellationToken);
     var reportCount = await db.Reports.CountAsync(report =>
         db.Users.Any(user => user.Id == report.UserId && user.SectionId == sectionId), cancellationToken);
     return Results.Ok(new { canDelete = studentCount == 0 && reportCount == 0, studentCount, reportCount });
@@ -878,7 +880,8 @@ app.MapDelete("/api/admin/class-options/sections/{sectionId:int}", async (
     await using var transaction = await db.Database.BeginTransactionAsync(cancellationToken);
     var section = await db.SchoolSections.SingleOrDefaultAsync(item => item.Id == sectionId, cancellationToken);
     if (section is null) return Results.NotFound(new { message = "Section not found." });
-    var hasStudents = await db.Users.AnyAsync(user => user.SectionId == sectionId, cancellationToken);
+    var hasStudents = await db.Users.AnyAsync(
+        user => user.Role != "demo" && user.SectionId == sectionId, cancellationToken);
     var hasReports = await db.Reports.AnyAsync(report =>
         db.Users.Any(user => user.Id == report.UserId && user.SectionId == sectionId), cancellationToken);
     if (hasStudents || hasReports)
@@ -1011,6 +1014,8 @@ app.MapPost("/api/admin/class-options/import", async (
 app.MapGet("/api/admin/overview", async (
     int? page,
     int? pageSize,
+    string? search,
+    string? sort,
     AppDbContext db,
     CancellationToken cancellationToken) =>
 {
@@ -1033,11 +1038,31 @@ app.MapGet("/api/admin/overview", async (
     var query = db.Reports.AsNoTracking()
         .Join(db.Users.AsNoTracking(), report => report.UserId, user => user.Id,
             (report, user) => new { Report = report, User = user });
+    if (!string.IsNullOrWhiteSpace(search))
+    {
+        var term = search.Trim().ToLower();
+        query = query.Where(item =>
+            item.Report.Title.ToLower().Contains(term) ||
+            item.Report.Description.ToLower().Contains(term) ||
+            item.Report.Category.ToLower().Contains(term) ||
+            item.User.Username.ToLower().Contains(term) ||
+            db.SchoolGrades.Any(grade => grade.Id == item.User.GradeLevelId && grade.Name.ToLower().Contains(term)) ||
+            db.SchoolSections.Any(section => section.Id == item.User.SectionId && section.Name.ToLower().Contains(term)));
+    }
     var totalReports = await query.CountAsync(cancellationToken);
     var currentPageSize = Math.Clamp(pageSize ?? 10, 1, 50);
     var currentPage = Math.Clamp(page ?? 1, 1, Math.Max(1, (int)Math.Ceiling(totalReports / (double)currentPageSize)));
-    var reportRows = await query.OrderByDescending(item => item.Report.CreatedAt)
-        .ThenByDescending(item => item.Report.Id)
+    var orderedQuery = sort == "oldest"
+        ? query.OrderBy(item => item.Report.CreatedAt).ThenBy(item => item.Report.Id)
+        : sort == "priority"
+            ? query
+                .OrderByDescending(item => item.Report.Priority == "Critical" ? 4 :
+                    item.Report.Priority == "High" ? 3 :
+                    item.Report.Priority == "Normal" ? 2 : 1)
+                .ThenByDescending(item => item.Report.CreatedAt)
+                .ThenByDescending(item => item.Report.Id)
+            : query.OrderByDescending(item => item.Report.CreatedAt).ThenByDescending(item => item.Report.Id);
+    var reportRows = await orderedQuery
         .Skip((currentPage - 1) * currentPageSize)
         .Take(currentPageSize)
         .Select(item => new
@@ -1237,7 +1262,7 @@ app.MapGet("/api/admin/report-folders/grades/{gradeLevelId:int}/sections", async
             section.Name,
             section.IsActive,
             StudentCount = db.Users.Count(user =>
-                user.SectionId == section.Id && user.GradeLevelId == gradeLevelId),
+                user.Role != "demo" && user.SectionId == section.Id && user.GradeLevelId == gradeLevelId),
             ReportCount = db.Reports.Count(report => db.Users.Any(user =>
                 user.Id == report.UserId &&
                 user.SectionId == section.Id &&
@@ -1759,7 +1784,12 @@ static bool IsValidPersonName(string name)
     if (string.IsNullOrWhiteSpace(name)) return false;
     foreach (var character in name)
     {
-        if (!char.IsLetter(character) && !char.IsWhiteSpace(character) &&
+        var category = char.GetUnicodeCategory(character);
+        if (!char.IsLetter(character) &&
+            category != UnicodeCategory.NonSpacingMark &&
+            category != UnicodeCategory.SpacingCombiningMark &&
+            category != UnicodeCategory.EnclosingMark &&
+            !char.IsWhiteSpace(character) &&
             character != '-' && character != '\'' && character != '\u2019')
             return false;
     }
@@ -2171,7 +2201,7 @@ static async Task<(Dictionary<int, ClassOptionDependency> Grades, Dictionary<int
         IReadOnlyCollection<SchoolSection> sections)
 {
     var assignments = await db.Users.AsNoTracking()
-        .Select(user => new { user.Id, user.GradeLevelId, user.SectionId })
+        .Select(user => new { user.Id, user.Role, user.GradeLevelId, user.SectionId })
         .ToListAsync();
     var reportCounts = await db.Reports.AsNoTracking()
         .GroupBy(report => report.UserId)
@@ -2181,7 +2211,7 @@ static async Task<(Dictionary<int, ClassOptionDependency> Grades, Dictionary<int
         .ToDictionary(group => group.Key, group => group.Select(section => section.Id).ToHashSet());
     var sectionDependencies = sections.ToDictionary(section => section.Id, section =>
     {
-        var assignedUsers = assignments.Where(user => user.SectionId == section.Id).ToList();
+        var assignedUsers = assignments.Where(user => user.Role != "demo" && user.SectionId == section.Id).ToList();
         return new ClassOptionDependency(
             assignedUsers.Count,
             assignedUsers.Sum(user => reportCounts.GetValueOrDefault(user.Id)));
@@ -2189,7 +2219,7 @@ static async Task<(Dictionary<int, ClassOptionDependency> Grades, Dictionary<int
     var gradeDependencies = grades.ToDictionary(grade => grade.Id, grade =>
     {
         var sectionIds = sectionsByGrade.GetValueOrDefault(grade.Id) ?? [];
-        var assignedUsers = assignments.Where(user =>
+        var assignedUsers = assignments.Where(user => user.Role != "demo" &&
             user.GradeLevelId == grade.Id ||
             (user.SectionId is int sectionId && sectionIds.Contains(sectionId))).ToList();
         return new ClassOptionDependency(
